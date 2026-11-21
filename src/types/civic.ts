@@ -16,11 +16,28 @@ export type ReportStatus =
 
 export type AuthChannel = 'Mobile SMS' | 'WhatsApp';
 
+export type AuthorityBranch = 'POLITICAL' | 'ADMINISTRATIVE';
+
+export type VerificationStatus =
+  | 'VERIFIED'
+  | 'PARTIALLY_VERIFIED'
+  | 'STALE'
+  | 'UNAVAILABLE';
+
+export type ComplaintFormat =
+  | 'FORMAL_LETTER'
+  | 'OFFICIAL_EMAIL'
+  | 'CIVIC_CONCERN_REPORT';
+
 export interface WardZone {
   id: string;
   code: string;
   name: string;
   district: string;
+  localBodyType: string;
+  localBodyName: string;
+  assemblyConstituency: string;
+  parliamentaryConstituency: string;
   centerLat: number;
   centerLng: number;
   population: number;
@@ -39,16 +56,28 @@ export interface WardZone {
 export interface PublicOfficial {
   id: string;
   name: string;
+  branch: AuthorityBranch;
   designation: string;
   roleType: 'Elected Representative' | 'Civil Servant' | 'Department Head';
   department: string;
   categories: IssueCategory[];
   wardIds: string[];
-  email: string;
-  phone: string;
+  email: string | null;
+  phone: string | null;
   whatsapp?: string;
   officeAddress: string;
   responseTargetHours: number;
+  sourceUrl: string | null;
+  lastVerifiedIso: string | null;
+  isCurrentTermConfirmed: boolean;
+  isContactFromOfficialDomain: boolean;
+}
+
+export interface VerifiedAuthority {
+  official: PublicOfficial;
+  status: VerificationStatus;
+  verificationReasons: string[];
+  freshnessLabel: string;
 }
 
 export interface CivicReport {
@@ -66,6 +95,8 @@ export interface CivicReport {
   mediaType: 'image' | 'video' | 'none';
   mediaUrl?: string;
   seedImageKey?: 'pothole' | 'streetlight' | 'waste';
+  evidenceHash?: string;
+  complaintFormat?: ComplaintFormat;
   citizenName: string;
   citizenContact: string;
   authChannel: AuthChannel;
@@ -75,6 +106,23 @@ export interface CivicReport {
   status: ReportStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LocalDraftReport {
+  localId: string;
+  title: string;
+  category: IssueCategory;
+  severity: SeverityLevel;
+  description: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  wardId: string;
+  complaintFormat: ComplaintFormat;
+  draftSubject: string;
+  draftBody: string;
+  evidenceHash?: string;
+  savedAt: string;
 }
 
 export interface CitizenSession {
@@ -90,4 +138,24 @@ export interface GeneratedDraftResponse {
   body: string;
   recommendedChannel: string;
   urgencySummary: string;
+}
+
+export type DisasterScale = 'LOCAL_EMERGENCY' | 'LARGE_SCALE_DISASTER';
+
+export interface DisasterCategoryMeta {
+  id: string;
+  title: string;
+  scale: DisasterScale;
+  immediateActions: string[];
+  strictDoNots: string[];
+  sourceAgency: string;
+  sourceUrl: string;
+}
+
+export interface EmergencyHelpline {
+  serviceName: string;
+  phoneNumber: string;
+  scope: string;
+  isVerifiedOfficial: boolean;
+  sourceCitation: string;
 }

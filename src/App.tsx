@@ -3,17 +3,26 @@ import {
   ClipboardList,
   FilePlus2,
   Menu,
+  ShieldAlert,
   ShieldCheck,
   Users,
   X,
 } from 'lucide-react';
 import { CitizenAuthModal } from './components/CitizenAuthModal';
 import { CivicLedgerView } from './components/CivicLedgerView';
+import { DisasterManagementView } from './components/DisasterManagementView';
 import { OfficialsDirectory } from './components/OfficialsDirectory';
 import { ReportComposer } from './components/ReportComposer';
-import type { CitizenSession, CivicReport, ReportStatus } from './types/civic';
+import type {
+  CitizenSession,
+  CivicReport,
+  LocalDraftReport,
+  ReportStatus,
+} from './types/civic';
 
-type ActiveTab = 'ledger' | 'report' | 'officials' | 'submissions';
+type ActiveTab = 'ledger' | 'report' | 'disaster' | 'officials' | 'submissions';
+
+const LOCAL_DRAFTS_KEY = 'cityfix_local_drafts_v1';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('ledger');
@@ -24,6 +33,25 @@ export const App: React.FC = () => {
   const [reports, setReports] = useState<CivicReport[]>([]);
   const [reportsLoading, setReportsLoading] = useState(true);
   const [reportsError, setReportsError] = useState<string | null>(null);
+  const [resumedDraft, setResumedDraft] = useState<LocalDraftReport | null>(null);
+
+  const [localDrafts, setLocalDrafts] = useState<LocalDraftReport[]>(() => {
+    try {
+      const raw = localStorage.getItem(LOCAL_DRAFTS_KEY);
+      return raw ? (JSON.parse(raw) as LocalDraftReport[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const persistLocalDrafts = (next: LocalDraftReport[]) => {
+    setLocalDrafts(next);
+    try {
+      localStorage.setItem(LOCAL_DRAFTS_KEY, JSON.stringify(next));
+    } catch {
+      // Ignore storage quota errors
+    }
+  };
 
   const fetchReports = async () => {
     setReportsLoading(true);
@@ -49,7 +77,31 @@ export const App: React.FC = () => {
 
   const handleReportSubmitted = (newReport: CivicReport) => {
     setReports((prev) => [newReport, ...prev]);
+    if (resumedDraft) {
+      persistLocalDrafts(
+        localDrafts.filter((d) => d.localId !== resumedDraft.localId)
+      );
+      setResumedDraft(null);
+    }
     setActiveTab('ledger');
+  };
+
+  const handleSaveLocalDraft = (draft: LocalDraftReport) => {
+    const existingIdx = localDrafts.findIndex((d) => d.localId === draft.localId);
+    const updated =
+      existingIdx >= 0
+        ? localDrafts.map((d) => (d.localId === draft.localId ? draft : d))
+        : [draft, ...localDrafts];
+    persistLocalDrafts(updated);
+  };
+
+  const handleDeleteLocalDraft = (localId: string) => {
+    persistLocalDrafts(localDrafts.filter((d) => d.localId !== localId));
+  };
+
+  const handleResumeDraft = (draft: LocalDraftReport) => {
+    setResumedDraft(draft);
+    setActiveTab('report');
   };
 
   const handleStatusChange = async (reportId: string, status: ReportStatus) => {
@@ -73,6 +125,7 @@ export const App: React.FC = () => {
   }[] = [
     { id: 'ledger', label: 'Civic Ledger', Icon: ClipboardList },
     { id: 'report', label: 'Report Issue', Icon: FilePlus2 },
+    { id: 'disaster', label: 'Disaster & Emergency', Icon: ShieldAlert },
     { id: 'officials', label: 'Officials Directory', Icon: Users },
     { id: 'submissions', label: 'My Submissions', Icon: ShieldCheck },
   ];
@@ -93,18 +146,36 @@ export const App: React.FC = () => {
         <nav className="flex-1 px-3 py-5 space-y-1" aria-label="Primary Sidebar">
           {navItems.map(({ id, label, Icon }) => {
             const active = activeTab === id;
+            const isDisaster = id === 'disaster';
             return (
               <button
                 key={id}
                 type="button"
-                onClick={() => setActiveTab(id)}
+                onClick={() => {
+                  if (id === 'report') setResumedDraft(null);
+                  setActiveTab(id);
+                }}
                 className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
                   active
-                    ? 'bg-sky-50 text-[#0f4c81]'
+                    ? isDisaster
+                      ? 'bg-red-50 text-red-800'
+                      : 'bg-sky-50 text-[#0f4c81]'
+                    : isDisaster
+                    ? 'text-red-700 hover:bg-red-50/70'
                     : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
-                <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-[#0f4c81]' : 'text-slate-400'}`} />
+                <Icon
+                  className={`h-4 w-4 shrink-0 ${
+                    active
+                      ? isDisaster
+                        ? 'text-red-700'
+                        : 'text-[#0f4c81]'
+                      : isDisaster
+                      ? 'text-red-600'
+                      : 'text-slate-400'
+                  }`}
+                />
                 {label}
               </button>
             );
@@ -164,6 +235,7 @@ export const App: React.FC = () => {
                     key={id}
                     type="button"
                     onClick={() => {
+                      if (id === 'report') setResumedDraft(null);
                       setActiveTab(id);
                       setMobileMenuOpen(false);
                     }}
@@ -215,7 +287,10 @@ export const App: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('report')}
+              onClick={() => {
+                setResumedDraft(null);
+                setActiveTab('report');
+              }}
               className="inline-flex items-center rounded-md bg-[#0f4c81] px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-[#0c3d68] whitespace-nowrap shrink-0"
             >
               Report Issue
@@ -227,31 +302,49 @@ export const App: React.FC = () => {
           {activeTab === 'ledger' && (
             <CivicLedgerView
               reports={reports}
+              localDrafts={localDrafts}
               loading={reportsLoading}
               error={reportsError}
-              onCreateNew={() => setActiveTab('report')}
+              onCreateNew={() => {
+                setResumedDraft(null);
+                setActiveTab('report');
+              }}
+              onOpenDisaster={() => setActiveTab('disaster')}
+              onResumeDraft={handleResumeDraft}
+              onDeleteDraft={handleDeleteLocalDraft}
               onStatusChange={handleStatusChange}
             />
           )}
 
           {activeTab === 'report' && (
             <ReportComposer
+              key={resumedDraft?.localId ?? 'new-report'}
               session={session}
+              initialDraft={resumedDraft}
               onRequireAuth={() => setAuthModalOpen(true)}
               onReportSubmitted={handleReportSubmitted}
+              onSaveLocalDraft={handleSaveLocalDraft}
             />
           )}
+
+          {activeTab === 'disaster' && <DisasterManagementView />}
 
           {activeTab === 'officials' && <OfficialsDirectory />}
 
           {activeTab === 'submissions' && (
             <CivicLedgerView
               reports={reports}
+              localDrafts={localDrafts}
               loading={reportsLoading}
               error={reportsError}
               onlyMine
               citizenContact={session?.contact}
-              onCreateNew={() => setActiveTab('report')}
+              onCreateNew={() => {
+                setResumedDraft(null);
+                setActiveTab('report');
+              }}
+              onResumeDraft={handleResumeDraft}
+              onDeleteDraft={handleDeleteLocalDraft}
               onStatusChange={handleStatusChange}
             />
           )}

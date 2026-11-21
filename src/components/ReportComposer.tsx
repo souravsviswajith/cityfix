@@ -1,14 +1,17 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  Bookmark,
   Camera,
   Check,
   Copy,
   Download,
+  ExternalLink,
   FileText,
   Mail,
   Phone,
   Send,
+  ShieldCheck,
   Sparkles,
   Upload,
   Video,
@@ -16,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   ISSUE_CATEGORIES,
+  evaluateAuthorityVerification,
   getResponsibleOfficials,
   identifyJurisdiction,
 } from '../data/civicDirectory';
@@ -23,15 +27,20 @@ import { SEED_IMAGE_ASSETS } from '../data/civicMedia';
 import type {
   CitizenSession,
   CivicReport,
+  ComplaintFormat,
   IssueCategory,
+  LocalDraftReport,
   SeverityLevel,
+  VerificationStatus,
 } from '../types/civic';
 import { WardMapPicker } from './WardMapPicker';
 
 interface ReportComposerProps {
   session: CitizenSession | null;
+  initialDraft?: LocalDraftReport | null;
   onRequireAuth: () => void;
   onReportSubmitted: (report: CivicReport) => void;
+  onSaveLocalDraft: (draft: LocalDraftReport) => void;
 }
 
 const SAMPLE_EVIDENCE_PRESETS: {
@@ -87,26 +96,57 @@ const SAMPLE_EVIDENCE_PRESETS: {
   },
 ];
 
+const VERIFICATION_STYLES: Record<
+  VerificationStatus,
+  { label: string; colorClass: string }
+> = {
+  VERIFIED: { label: 'Verified Official', colorClass: 'text-emerald-700' },
+  PARTIALLY_VERIFIED: { label: 'Partially Verified', colorClass: 'text-amber-700' },
+  STALE: { label: 'Cached / Stale', colorClass: 'text-slate-600' },
+  UNAVAILABLE: { label: 'Unavailable', colorClass: 'text-red-700' },
+};
+
+async function computeSha256Hex(buffer: ArrayBuffer): Promise<string> {
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return '';
+}
+
 export const ReportComposer: React.FC<ReportComposerProps> = ({
   session,
+  initialDraft,
   onRequireAuth,
   onReportSubmitted,
+  onSaveLocalDraft,
 }) => {
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<IssueCategory>('roads');
-  const [severity, setSeverity] = useState<SeverityLevel>('Moderate');
-  const [description, setDescription] = useState('');
-  const [address, setAddress] = useState('');
-  const [latitude, setLatitude] = useState(12.9716);
-  const [longitude, setLongitude] = useState(77.5946);
-  const [explicitWardId, setExplicitWardId] = useState<string | undefined>('ward-01');
+  const [title, setTitle] = useState(initialDraft?.title ?? '');
+  const [category, setCategory] = useState<IssueCategory>(
+    initialDraft?.category ?? 'roads'
+  );
+  const [severity, setSeverity] = useState<SeverityLevel>(
+    initialDraft?.severity ?? 'Moderate'
+  );
+  const [description, setDescription] = useState(initialDraft?.description ?? '');
+  const [address, setAddress] = useState(initialDraft?.address ?? '');
+  const [latitude, setLatitude] = useState(initialDraft?.latitude ?? 12.9716);
+  const [longitude, setLongitude] = useState(initialDraft?.longitude ?? 77.5946);
+  const [explicitWardId, setExplicitWardId] = useState<string | undefined>(
+    initialDraft?.wardId ?? 'ward-01'
+  );
 
-  // Evidence state
+  // Evidence state with SHA-256 hash integrity
   const [mediaType, setMediaType] = useState<'image' | 'video' | 'none'>('none');
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string>('');
   const [seedImageKey, setSeedImageKey] = useState<
     'pothole' | 'streetlight' | 'waste' | undefined
   >(undefined);
+  const [evidenceHash, setEvidenceHash] = useState<string>(
+    initialDraft?.evidenceHash ?? ''
+  );
   const [imageBase64, setImageBase64] = useState<string>('');
   const [imageMimeType, setImageMimeType] = useState<string>('');
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -115,9 +155,12 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Draft & Submission state
-  const [draftSubject, setDraftSubject] = useState('');
-  const [draftBody, setDraftBody] = useState('');
+  // Multi-format Draft & Submission state
+  const [complaintFormat, setComplaintFormat] = useState<ComplaintFormat>(
+    initialDraft?.complaintFormat ?? 'FORMAL_LETTER'
+  );
+  const [draftSubject, setDraftSubject] = useState(initialDraft?.draftSubject ?? '');
+  const [draftBody, setDraftBody] = useState(initialDraft?.draftBody ?? '');
   const [recommendedChannel, setRecommendedChannel] = useState('');
   const [urgencySummary, setUrgencySummary] = useState('');
   const [draftLoading, setDraftLoading] = useState(false);
@@ -125,16 +168,19 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [draftSavedNotice, setDraftSavedNotice] = useState(false);
 
   const selectedWard = useMemo(
     () => identifyJurisdiction(latitude, longitude, explicitWardId),
     [latitude, longitude, explicitWardId]
   );
 
-  const responsibleOfficials = useMemo(
-    () => getResponsibleOfficials(selectedWard.id, category),
-    [selectedWard.id, category]
-  );
+  const verifiedAuthorities = useMemo(() => {
+    const raw = getResponsibleOfficials(selectedWard.id, category);
+    return raw.map((official) =>
+      evaluateAuthorityVerification(official, selectedWard.id, category)
+    );
+  }, [selectedWard.id, category]);
 
   const handleLocationChange = (lat: number, lng: number, wardOverride?: string) => {
     setLatitude(lat);
@@ -142,11 +188,15 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
     setExplicitWardId(wardOverride);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setSeedImageKey(undefined);
+    const arrayBuffer = await file.arrayBuffer();
+    const sha256 = await computeSha256Hex(arrayBuffer);
+    setEvidenceHash(sha256);
+
     if (file.type.startsWith('video/')) {
       const url = URL.createObjectURL(file);
       setMediaType('video');
@@ -183,7 +233,9 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   const handleOpenCamera = async () => {
     setCameraError(null);
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Camera capture is not supported in this browser. Use file upload instead.');
+      setCameraError(
+        'Camera capture is not supported in this browser. Use file upload instead.'
+      );
       return;
     }
     try {
@@ -198,7 +250,9 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
         }
       });
     } catch {
-      setCameraError('Camera permission denied or unavailable. Please upload an image or video file.');
+      setCameraError(
+        'Camera permission denied or unavailable. Please upload an image or video file.'
+      );
     }
   };
 
@@ -212,6 +266,12 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    canvas.toBlob(async (blob) => {
+      if (blob) {
+        const hash = await computeSha256Hex(await blob.arrayBuffer());
+        setEvidenceHash(hash);
+      }
+    }, 'image/jpeg');
     setSeedImageKey(undefined);
     setMediaType('image');
     setMediaPreviewUrl(dataUrl);
@@ -234,10 +294,12 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
     const assetUrl = SEED_IMAGE_ASSETS[preset.id];
     setMediaPreviewUrl(assetUrl);
 
-    // Fetch asset as base64 so Gemini multimodal analysis can inspect it directly
     try {
       const resp = await fetch(assetUrl);
       const blob = await resp.blob();
+      const sha256 = await computeSha256Hex(await blob.arrayBuffer());
+      setEvidenceHash(sha256);
+
       const reader = new FileReader();
       reader.onload = () => {
         const resStr = typeof reader.result === 'string' ? reader.result : '';
@@ -270,12 +332,14 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           category,
           severity,
           description,
-          address: address || `${selectedWard.name} (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
+          address:
+            address ||
+            `${selectedWard.name} (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
           latitude,
           longitude,
           wardName: selectedWard.name,
           district: selectedWard.district,
-          officials: responsibleOfficials,
+          officials: verifiedAuthorities.map((v) => v.official),
           citizenName: session?.name ?? 'Verified Citizen',
           citizenContact: session?.contact ?? 'Mobile / WhatsApp Verified',
           mediaDescription:
@@ -284,6 +348,8 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
               : mediaType === 'video'
               ? 'Geotagged video recording attached by citizen.'
               : 'Written field observation submitted without visual media.',
+          evidenceHash: evidenceHash || undefined,
+          format: complaintFormat,
           imageBase64: imageBase64 || undefined,
           imageMimeType: imageMimeType || undefined,
         }),
@@ -307,14 +373,90 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   const handleBuildTemplateDraft = () => {
     setDraftError(null);
     const catObj = ISSUE_CATEGORIES.find((c) => c.id === category);
-    const recipients = responsibleOfficials.map((o) => `${o.name} (${o.designation})`).join(', ');
-    setDraftSubject(
-      `[${severity.toUpperCase()}] ${title || 'Civic Infrastructure Report'} — ${selectedWard.code} (${selectedWard.name})`
-    );
-    setDraftBody(
-      `To: ${recipients}\n\nSubject: Formal Civic Complaint — ${title || 'Municipal Issue'}\n\nDear Officials,\n\nI am writing to formally report a ${severity.toLowerCase()} ${catObj?.label.toLowerCase() ?? 'civic'} issue located at ${address || selectedWard.name} (Coordinates: ${latitude.toFixed(5)}, ${longitude.toFixed(5)} within ${selectedWard.name}, ${selectedWard.district}).\n\nIssue Summary:\n${description || '[Describe observed issue and public impact]'}\n\nEvidence & Jurisdiction:\n- Jurisdiction: ${selectedWard.code} — ${selectedWard.name}\n- Responsible Department: ${catObj?.department ?? 'Municipal Administration'}\n- Visual Evidence: ${mediaType === 'none' ? 'Filed as text report' : `Attached ${mediaType} documentation`}\n\nRequested Action:\nKindly log this report, inspect the site within the department response window, and provide a confirmation reference.\n\nRespectfully,\n${session?.name ?? 'Concerned Citizen'}\n${session?.contact ?? ''}`
-    );
+    const authorityBlock = verifiedAuthorities
+      .map(({ official }) => {
+        const contact = [official.email, official.phone].filter(Boolean).join(' | ');
+        return `- ${official.designation} (${official.name}) — ${official.department}${
+          contact ? ` [${contact}]` : ''
+        }`;
+      })
+      .join('\n');
+
+    const evidenceLine =
+      mediaType === 'none'
+        ? 'No photographic or video attachments included.'
+        : `Attached ${mediaType} evidence${
+            evidenceHash ? ` | Integrity SHA-256: ${evidenceHash.slice(0, 16)}...` : ''
+          }`;
+
+    const subject = `Civic Infrastructure Complaint: ${catObj?.label ?? category} — ${selectedWard.name} (${selectedWard.code})`;
+    setDraftSubject(subject);
+
+    const locText = `${address || selectedWard.name}\nGPS Coordinates: ${latitude.toFixed(
+      5
+    )}, ${longitude.toFixed(5)}\nWard: ${selectedWard.code} — ${selectedWard.name} (${
+      selectedWard.localBodyName
+    })`;
+
+    if (complaintFormat === 'OFFICIAL_EMAIL') {
+      setDraftBody(
+        `Dear Official / Representative,\n\nPlease find below a documented civic grievance requiring attention from ${
+          catObj?.department ?? 'Municipal Engineering'
+        }:\n\n• Issue Headline: ${title || 'Municipal Issue'}\n• Category: ${
+          catObj?.label ?? category
+        } (${severity})\n• Location: ${address || selectedWard.name} (GPS: ${latitude.toFixed(
+          5
+        )}, ${longitude.toFixed(5)})\n• Jurisdiction: ${selectedWard.code} — ${
+          selectedWard.name
+        }\n\nDetails:\n${
+          description || '[Describe observed issue and public impact]'
+        }\n\nEvidence Manifest:\n${evidenceLine}\n\nAddressed Authorities:\n${authorityBlock}\n\nRequesting timely field inspection and remediation.\n\nRegards,\n${
+          session?.name ?? 'Concerned Citizen'
+        }\n${session?.contact ?? ''}`
+      );
+    } else if (complaintFormat === 'CIVIC_CONCERN_REPORT') {
+      setDraftBody(
+        `=== CIVIC CONCERN FIELD REPORT ===\nCategory: ${
+          catObj?.label ?? category
+        } (${severity})\nTitle: ${
+          title || 'Civic Issue'
+        }\nLocation:\n${locText}\n\nField Observation:\n${
+          description || '[Describe observed issue]'
+        }\n\nIdentified Authorities & Provenance:\n${authorityBlock}\n\nEvidence Integrity:\n${evidenceLine}`
+      );
+    } else {
+      setDraftBody(
+        `To,\n${authorityBlock}\n\nSubject: ${subject}\n\nRespected Sir/Madam,\n\nI am writing as a resident to formally bring to your urgent attention a ${severity.toLowerCase()} civic infrastructure issue regarding ${
+          catObj?.label.toLowerCase() ?? 'municipal services'
+        } in our locality.\n\n1. ISSUE DESCRIPTION:\n${
+          description || '[Describe observed issue and public impact]'
+        }\n\n2. EXACT LOCATION & JURISDICTION:\n${locText}\n\n3. SUPPORTING EVIDENCE:\n${evidenceLine}\n\n4. REQUESTED CORRECTIVE ACTION:\nKindly inspect the site at the earliest and initiate necessary repair/remediation work. Please share an acknowledgment or grievance reference number for tracking.\n\nYours faithfully,\n${
+          session?.name ?? 'Concerned Citizen'
+        }\n${session?.contact ?? ''}`
+      );
+    }
     setRecommendedChannel('Official Municipal Email + Ward WhatsApp Desk');
+  };
+
+  const handleSaveOfflineDraft = () => {
+    onSaveLocalDraft({
+      localId: initialDraft?.localId ?? `DRAFT-${Date.now()}`,
+      title: title || 'Untitled Civic Draft',
+      category,
+      severity,
+      description,
+      address,
+      latitude,
+      longitude,
+      wardId: selectedWard.id,
+      complaintFormat,
+      draftSubject,
+      draftBody,
+      evidenceHash: evidenceHash || undefined,
+      savedAt: new Date().toISOString(),
+    });
+    setDraftSavedNotice(true);
+    setTimeout(() => setDraftSavedNotice(false), 2500);
   };
 
   const handleCopyDraft = async () => {
@@ -324,13 +466,16 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Ignore clipboard failure
+      // Ignore clipboard error
     }
   };
 
   const handleDownloadDraft = () => {
-    const recipientEmails = responsibleOfficials.map((o) => o.email).join(', ');
-    const content = `To: ${recipientEmails}\nSubject: ${draftSubject}\nWard: ${selectedWard.code} (${selectedWard.name})\nCoordinates: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}\n\n${draftBody}\n`;
+    const recipientEmails = verifiedAuthorities
+      .map((v) => v.official.email)
+      .filter(Boolean)
+      .join(', ');
+    const content = `To: ${recipientEmails}\nSubject: ${draftSubject}\nWard: ${selectedWard.code} (${selectedWard.name})\nCoordinates: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}\nEvidence SHA-256: ${evidenceHash || 'None'}\n\n${draftBody}\n`;
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -366,6 +511,8 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           mediaType,
           mediaUrl: seedImageKey ? undefined : mediaPreviewUrl || undefined,
           seedImageKey,
+          evidenceHash: evidenceHash || undefined,
+          complaintFormat,
           citizenName: session?.name ?? 'Unverified Citizen',
           citizenContact: session?.contact ?? 'Guest Session',
           authChannel: session?.channel ?? 'Mobile SMS',
@@ -389,13 +536,16 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   };
 
   const mailtoHref = useMemo(() => {
-    const to = responsibleOfficials.map((o) => o.email).join(',');
+    const to = verifiedAuthorities
+      .map((v) => v.official.email)
+      .filter(Boolean)
+      .join(',');
     const subject = encodeURIComponent(
       draftSubject || `Civic Issue Report: ${title} (${selectedWard.code})`
     );
     const body = encodeURIComponent(draftBody || description);
     return `mailto:${to}?subject=${subject}&body=${body}`;
-  }, [responsibleOfficials, draftSubject, title, selectedWard.code, draftBody, description]);
+  }, [verifiedAuthorities, draftSubject, title, selectedWard.code, draftBody, description]);
 
   return (
     <form onSubmit={handleSubmitReport} className="space-y-6">
@@ -405,8 +555,8 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             Report Civic Issue & Draft Formal Complaint
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Document evidence, lock geotagged ward jurisdiction, inspect responsible officials, and
-            generate an AI-assisted formal complaint.
+            Capture SHA-256 hashed visual evidence, lock ward jurisdiction, verify responsible
+            authorities, and generate a formal complaint.
           </p>
         </div>
 
@@ -441,13 +591,13 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
       )}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-        {/* Left Column: Visual Evidence, Details & Geotagging */}
+        {/* Left Column */}
         <div className="space-y-6 xl:col-span-7">
           {/* 01. Visual Evidence */}
           <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-900">
-                01. Visual Evidence (Photo or Video)
+                01. Visual Evidence & SHA-256 Integrity Hash
               </h2>
               <div className="flex items-center gap-2">
                 <button
@@ -476,9 +626,7 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
               </div>
             </div>
 
-            {cameraError && (
-              <p className="text-xs text-amber-700">{cameraError}</p>
-            )}
+            {cameraError && <p className="text-xs text-amber-700">{cameraError}</p>}
 
             {cameraOpen && (
               <div className="space-y-3 rounded-md border border-slate-200 bg-slate-950 p-3">
@@ -509,35 +657,43 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             )}
 
             {mediaPreviewUrl ? (
-              <div className="relative overflow-hidden rounded-md border border-slate-200 bg-slate-100">
-                {mediaType === 'video' ? (
-                  <video
-                    src={mediaPreviewUrl}
-                    controls
-                    className="w-full max-h-64 object-cover"
-                  />
-                ) : (
-                  <img
-                    src={mediaPreviewUrl}
-                    alt="Uploaded civic issue evidence"
-                    referrerPolicy="no-referrer"
-                    className="w-full max-h-64 object-cover"
-                  />
+              <div className="space-y-2">
+                <div className="relative overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                  {mediaType === 'video' ? (
+                    <video
+                      src={mediaPreviewUrl}
+                      controls
+                      className="w-full max-h-64 object-cover"
+                    />
+                  ) : (
+                    <img
+                      src={mediaPreviewUrl}
+                      alt="Uploaded civic issue evidence"
+                      referrerPolicy="no-referrer"
+                      className="w-full max-h-64 object-cover"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMediaType('none');
+                      setMediaPreviewUrl('');
+                      setSeedImageKey(undefined);
+                      setEvidenceHash('');
+                      setImageBase64('');
+                      setImageMimeType('');
+                    }}
+                    aria-label="Remove attached media"
+                    className="absolute right-2 top-2 rounded-md bg-slate-900/75 p-1.5 text-white hover:bg-slate-900"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {evidenceHash && (
+                  <p className="font-mono text-[11px] text-slate-500 break-all">
+                    Original SHA-256 Digest: {evidenceHash}
+                  </p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMediaType('none');
-                    setMediaPreviewUrl('');
-                    setSeedImageKey(undefined);
-                    setImageBase64('');
-                    setImageMimeType('');
-                  }}
-                  aria-label="Remove attached media"
-                  className="absolute right-2 top-2 rounded-md bg-slate-900/75 p-1.5 text-white hover:bg-slate-900"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
               </div>
             ) : (
               <button
@@ -553,13 +709,13 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
                   Upload a photograph or short video of the municipal problem
                 </p>
                 <p className="text-xs text-slate-500">
-                  Or choose one of the documentary samples above to pre-fill an example report
+                  Computes a local SHA-256 evidentiary hash automatically
                 </p>
               </button>
             )}
           </section>
 
-          {/* 02. Issue Classification & Description */}
+          {/* 02. Issue Details */}
           <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
             <h2 className="text-sm font-semibold text-slate-900">
               02. Issue Details & Classification
@@ -567,7 +723,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
-                <label htmlFor="issue-category" className="block text-xs font-medium text-slate-700 mb-1">
+                <label
+                  htmlFor="issue-category"
+                  className="block text-xs font-medium text-slate-700 mb-1"
+                >
                   Problem Category
                 </label>
                 <select
@@ -585,7 +744,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
               </div>
 
               <div>
-                <label htmlFor="issue-severity" className="block text-xs font-medium text-slate-700 mb-1">
+                <label
+                  htmlFor="issue-severity"
+                  className="block text-xs font-medium text-slate-700 mb-1"
+                >
                   Severity Level
                 </label>
                 <select
@@ -603,7 +765,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             </div>
 
             <div>
-              <label htmlFor="issue-title" className="block text-xs font-medium text-slate-700 mb-1">
+              <label
+                htmlFor="issue-title"
+                className="block text-xs font-medium text-slate-700 mb-1"
+              >
                 Issue Headline
               </label>
               <input
@@ -618,7 +783,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             </div>
 
             <div>
-              <label htmlFor="issue-address" className="block text-xs font-medium text-slate-700 mb-1">
+              <label
+                htmlFor="issue-address"
+                className="block text-xs font-medium text-slate-700 mb-1"
+              >
                 Street Address or Nearest Landmark
               </label>
               <input
@@ -632,7 +800,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             </div>
 
             <div>
-              <label htmlFor="issue-desc" className="block text-xs font-medium text-slate-700 mb-1">
+              <label
+                htmlFor="issue-desc"
+                className="block text-xs font-medium text-slate-700 mb-1"
+              >
                 Observed Details & Community Impact
               </label>
               <textarea
@@ -648,10 +819,14 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           </section>
 
           {/* 03. Geotagging */}
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 className="text-sm font-semibold text-slate-900 mb-3">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-slate-900">
               03. Automatic Geotagging & Jurisdiction Lock
             </h2>
+            <p className="text-xs text-slate-500">
+              {selectedWard.localBodyName} · {selectedWard.assemblyConstituency} ·{' '}
+              {selectedWard.parliamentaryConstituency}
+            </p>
             <WardMapPicker
               latitude={latitude}
               longitude={longitude}
@@ -661,60 +836,93 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           </section>
         </div>
 
-        {/* Right Column: Responsible Authorities + AI Draft & Review */}
+        {/* Right Column: Authority Verification + Multi-Format Draft & Review */}
         <div className="space-y-6 xl:col-span-5">
-          {/* 04. Identified Authorities */}
+          {/* 04. Authority Verification Engine Output */}
           <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">
-                  04. Responsible Authorities ({selectedWard.code})
+                  04. Verified Responsible Authorities ({selectedWard.code})
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Auto-matched for {selectedWard.name} ·{' '}
-                  {ISSUE_CATEGORIES.find((c) => c.id === category)?.department}
+                  Political & administrative officials evaluated for {selectedWard.name}
                 </p>
               </div>
               <span className="font-mono text-xs text-slate-500 tabular-nums whitespace-nowrap">
-                {responsibleOfficials.length} matched
+                {verifiedAuthorities.length} matched
               </span>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {responsibleOfficials.map((official) => (
-                <div key={official.id} className="py-3 first:pt-0 last:pb-0">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">{official.name}</p>
-                    <span className="font-mono text-[11px] text-slate-500 tabular-nums">
-                      SLA {official.responseTargetHours}h
-                    </span>
-                  </div>
-                  <p className="text-xs font-medium text-[#0f4c81]">{official.designation}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {official.roleType} · {official.department}
-                  </p>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
-                    <a
-                      href={`mailto:${official.email}`}
-                      className="inline-flex items-center gap-1 font-mono hover:text-[#0f4c81] hover:underline"
-                    >
-                      <Mail className="h-3 w-3 text-slate-400" />
-                      {official.email}
-                    </a>
-                    <a
-                      href={`tel:${official.phone.replace(/[^+\d]/g, '')}`}
-                      className="inline-flex items-center gap-1 font-mono tabular-nums hover:text-[#0f4c81] hover:underline"
-                    >
-                      <Phone className="h-3 w-3 text-slate-400" />
-                      {official.phone}
-                    </a>
-                  </div>
-                </div>
-              ))}
+              {verifiedAuthorities.map(
+                ({ official, status, verificationReasons, freshnessLabel }) => {
+                  const verStyle = VERIFICATION_STYLES[status];
+                  return (
+                    <div key={official.id} className="py-3 first:pt-0 last:pb-0 space-y-1.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {official.name}
+                        </p>
+                        <span
+                          className={`inline-flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap ${verStyle.colorClass}`}
+                        >
+                          <ShieldCheck className="h-3 w-3" />
+                          {verStyle.label}
+                        </span>
+                      </div>
+
+                      <p className="text-xs font-medium text-[#0f4c81]">
+                        {official.designation}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {official.branch === 'POLITICAL' ? 'Political' : 'Administrative'} ·{' '}
+                        {official.department} · {freshnessLabel}
+                      </p>
+
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                        {official.email && (
+                          <a
+                            href={`mailto:${official.email}`}
+                            className="inline-flex items-center gap-1 font-mono hover:text-[#0f4c81] hover:underline"
+                          >
+                            <Mail className="h-3 w-3 text-slate-400" />
+                            {official.email}
+                          </a>
+                        )}
+                        {official.phone && (
+                          <a
+                            href={`tel:${official.phone.replace(/[^+\d]/g, '')}`}
+                            className="inline-flex items-center gap-1 font-mono tabular-nums hover:text-[#0f4c81] hover:underline"
+                          >
+                            <Phone className="h-3 w-3 text-slate-400" />
+                            {official.phone}
+                          </a>
+                        )}
+                        {official.sourceUrl && (
+                          <a
+                            href={official.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500 hover:text-[#0f4c81] hover:underline"
+                          >
+                            Source
+                            <ExternalLink className="h-2.5 w-2.5" />
+                          </a>
+                        )}
+                      </div>
+
+                      <p className="text-[11px] text-slate-500">
+                        {verificationReasons.slice(0, 2).join(' · ')}
+                      </p>
+                    </div>
+                  );
+                }
+              )}
             </div>
           </section>
 
-          {/* 05. AI-Assisted Draft Generation & Citizen Review */}
+          {/* 05. Multi-Format Draft Generator & Review */}
           <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -722,7 +930,8 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
                   05. Formal Complaint Draft & Review
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Generate with AI or structure manually, then review and edit before sending.
+                  Choose a document format, generate with AI or template, and review before
+                  dispatch.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -741,9 +950,33 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
                   className="inline-flex items-center gap-1.5 rounded-md bg-[#0f4c81] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#0c3d68] disabled:opacity-60 whitespace-nowrap"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  {draftLoading ? 'Drafting...' : 'AI Draft Complaint'}
+                  {draftLoading ? 'Drafting...' : 'AI Draft'}
                 </button>
               </div>
+            </div>
+
+            {/* Format Segmented Control */}
+            <div className="grid grid-cols-3 gap-1 rounded-md bg-slate-100 p-1">
+              {(
+                [
+                  { id: 'FORMAL_LETTER', label: 'Formal Letter' },
+                  { id: 'OFFICIAL_EMAIL', label: 'Official Email' },
+                  { id: 'CIVIC_CONCERN_REPORT', label: 'Field Report' },
+                ] as const
+              ).map((fmt) => (
+                <button
+                  key={fmt.id}
+                  type="button"
+                  onClick={() => setComplaintFormat(fmt.id)}
+                  className={`rounded px-2 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                    complaintFormat === fmt.id
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {fmt.label}
+                </button>
+              ))}
             </div>
 
             {draftError && (
@@ -772,7 +1005,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             )}
 
             <div>
-              <label htmlFor="draft-subject" className="block text-xs font-medium text-slate-700 mb-1">
+              <label
+                htmlFor="draft-subject"
+                className="block text-xs font-medium text-slate-700 mb-1"
+              >
                 Email / Complaint Subject Line
               </label>
               <input
@@ -786,28 +1022,49 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             </div>
 
             <div>
-              <label htmlFor="draft-body" className="block text-xs font-medium text-slate-700 mb-1">
+              <label
+                htmlFor="draft-body"
+                className="block text-xs font-medium text-slate-700 mb-1"
+              >
                 Editable Formal Letter Body
               </label>
               <textarea
                 id="draft-body"
-                rows={11}
+                rows={10}
                 value={draftBody}
                 onChange={(e) => setDraftBody(e.target.value)}
-                placeholder="Click 'AI Draft Complaint' to synthesize your issue description, geotagged ward coordinates, visual evidence, and official addressees into a formal letter..."
+                placeholder="Click 'AI Draft' or 'Template' to synthesize your description, coordinates, SHA-256 evidence digest, and official addressees..."
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-[#0f4c81] focus:outline-none"
               />
             </div>
 
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Note: CityFix prepares this structured complaint for your review. Sending via email
+              or post does not automatically register a ticket in internal municipal ERPs unless
+              acknowledged by the authority.
+            </p>
+
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveOfflineDraft}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+                >
+                  <Bookmark className="h-3.5 w-3.5" />
+                  {draftSavedNotice ? 'Saved Locally' : 'Save Draft'}
+                </button>
                 <button
                   type="button"
                   onClick={handleCopyDraft}
                   disabled={!draftBody && !draftSubject}
                   className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
                 >
-                  {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
                   {copied ? 'Copied' : 'Copy'}
                 </button>
                 <button
@@ -817,14 +1074,14 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
                   className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
                 >
                   <Download className="h-3.5 w-3.5" />
-                  Export .txt
+                  .txt
                 </button>
                 <a
                   href={mailtoHref}
                   className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap"
                 >
                   <Mail className="h-3.5 w-3.5" />
-                  Open Email App
+                  Email
                 </a>
               </div>
 
@@ -838,9 +1095,7 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
               </button>
             </div>
 
-            {submitError && (
-              <p className="text-xs text-red-700">{submitError}</p>
-            )}
+            {submitError && <p className="text-xs text-red-700">{submitError}</p>}
           </section>
         </div>
       </div>

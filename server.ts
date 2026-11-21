@@ -8,12 +8,14 @@ import {
   PUBLIC_OFFICIALS,
   SEED_REPORTS,
   WARD_ZONES,
+  evaluateAuthorityVerification,
   getResponsibleOfficials,
   identifyJurisdiction,
 } from './src/data/civicDirectory.js';
 import type {
   AuthChannel,
   CivicReport,
+  ComplaintFormat,
   IssueCategory,
   ReportStatus,
   SeverityLevel,
@@ -100,6 +102,56 @@ async function startServer() {
     const officials = getResponsibleOfficials(ward.id, validCategory);
 
     return res.json({ ward, officials });
+  });
+
+  // Authoritative resolution endpoint matching Part 3 architecture specification
+  app.get('/api/v1/authorities/resolve', (req, res) => {
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    const category =
+      typeof req.query.category === 'string'
+        ? (req.query.category as IssueCategory)
+        : 'roads';
+
+    if (
+      Number.isNaN(lat) ||
+      Number.isNaN(lon) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'Valid latitude and longitude required.' });
+    }
+
+    const ward = identifyJurisdiction(lat, lon);
+    const validCategory: IssueCategory = ISSUE_CATEGORIES.some((c) => c.id === category)
+      ? category
+      : 'roads';
+    const officials = getResponsibleOfficials(ward.id, validCategory).map((official) =>
+      evaluateAuthorityVerification(official, ward.id, validCategory)
+    );
+
+    return res.json({
+      jurisdiction: {
+        state: 'Metro State',
+        district: ward.district,
+        localBodyType: ward.localBodyType,
+        localBodyName: ward.localBodyName,
+        wardNumber: ward.code,
+        wardName: ward.name,
+        assemblyConstituency: ward.assemblyConstituency,
+        parliamentaryConstituency: ward.parliamentaryConstituency,
+        formattedAddress: `${ward.name}, ${ward.district}`,
+      },
+      authorities: officials,
+      dataAvailabilityNotice:
+        officials.length === 0
+          ? `No machine-readable government directory is currently connected for ${ward.localBodyName}.`
+          : null,
+    });
   });
 
   // Citizen Authentication (Mobile SMS or WhatsApp OTP)
@@ -249,6 +301,15 @@ async function startServer() {
         payload.seedImageKey === 'waste'
           ? payload.seedImageKey
           : undefined,
+      evidenceHash:
+        typeof payload.evidenceHash === 'string' && payload.evidenceHash.trim()
+          ? payload.evidenceHash.trim()
+          : undefined,
+      complaintFormat: (
+        ['FORMAL_LETTER', 'OFFICIAL_EMAIL', 'CIVIC_CONCERN_REPORT'] as ComplaintFormat[]
+      ).includes(payload.complaintFormat)
+        ? payload.complaintFormat
+        : 'FORMAL_LETTER',
       citizenName:
         typeof payload.citizenName === 'string' && payload.citizenName.trim()
           ? payload.citizenName.trim()
@@ -321,6 +382,8 @@ async function startServer() {
       citizenName,
       citizenContact,
       mediaDescription,
+      evidenceHash,
+      format,
       imageBase64,
       imageMimeType,
     } = req.body ?? {};
@@ -330,6 +393,13 @@ async function startServer() {
         .status(400)
         .json({ error: 'Issue title and description are required to draft a formal complaint.' });
     }
+
+    const formatLabel =
+      format === 'OFFICIAL_EMAIL'
+        ? 'Official Email'
+        : format === 'CIVIC_CONCERN_REPORT'
+        ? 'Civic Concern Field Report'
+        : 'Formal Municipal Letter';
 
     const categoryMeta =
       ISSUE_CATEGORIES.find((c) => c.id === category) ?? ISSUE_CATEGORIES[0];
@@ -342,9 +412,10 @@ async function startServer() {
           .join('\n')
       : 'Municipal Department Officials';
 
-    const promptText = `Draft a structured, formal municipal complaint letter / reporting email on behalf of a citizen.
+    const promptText = `Draft a structured ${formatLabel} on behalf of a citizen.
 
 Issue Details:
+- Format Requested: ${formatLabel}
 - Title: ${title}
 - Category: ${categoryMeta.label} (${categoryMeta.department})
 - Severity: ${severity ?? 'Moderate'}
@@ -352,7 +423,9 @@ Issue Details:
 - Geotagged Coordinates: ${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}
 - Jurisdiction: ${wardName ?? 'Municipal Ward'} — ${district ?? 'Metro District'}
 - Citizen Description: ${description}
-- Visual Evidence Note: ${mediaDescription ?? 'Photographic/video evidence attached by citizen.'}
+- Visual Evidence Note: ${mediaDescription ?? 'Photographic/video evidence attached by citizen.'}${
+      evidenceHash ? `\n- Evidence Integrity SHA-256 Digest: ${evidenceHash}` : ''
+    }
 - Reporting Citizen: ${citizenName ?? 'Verified Resident'} (${citizenContact ?? 'On file'})
 
 Responsible Authorities Addressed:

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Clock,
   FileWarning,
@@ -7,6 +8,7 @@ import {
   MapPin,
   Plus,
   Search,
+  Trash2,
   Wrench,
 } from 'lucide-react';
 import {
@@ -15,15 +17,19 @@ import {
   WARD_ZONES,
 } from '../data/civicDirectory';
 import { resolveReportMediaUrl } from '../data/civicMedia';
-import type { CivicReport, ReportStatus } from '../types/civic';
+import type { CivicReport, LocalDraftReport, ReportStatus } from '../types/civic';
 
 interface CivicLedgerViewProps {
   reports: CivicReport[];
+  localDrafts?: LocalDraftReport[];
   loading: boolean;
   error: string | null;
   onlyMine?: boolean;
   citizenContact?: string;
   onCreateNew: () => void;
+  onOpenDisaster?: () => void;
+  onResumeDraft?: (draft: LocalDraftReport) => void;
+  onDeleteDraft?: (localId: string) => void;
   onStatusChange: (reportId: string, status: ReportStatus) => Promise<void>;
 }
 
@@ -55,11 +61,15 @@ const STATUS_META: Record<
 
 export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
   reports,
+  localDrafts = [],
   loading,
   error,
   onlyMine = false,
   citizenContact,
   onCreateNew,
+  onOpenDisaster,
+  onResumeDraft,
+  onDeleteDraft,
   onStatusChange,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -116,12 +126,12 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">
-            {onlyMine ? 'My Submitted Civic Complaints' : 'Municipal Civic Accountability Ledger'}
+            {onlyMine ? 'My Submitted Civic Complaints & Offline Drafts' : 'Municipal Civic Accountability Ledger'}
           </h1>
           <p className="mt-1 text-sm text-slate-600">
             {onlyMine
-              ? 'Track official acknowledgments, assigned municipal officers, and field dispatch progress for your reports.'
-              : 'Public register of geotagged urban infrastructure issues, assigned public officials, and formal complaint briefs.'}
+              ? 'Review saved offline drafts, SHA-256 evidence digests, and official complaint progress.'
+              : 'Public register of geotagged urban infrastructure issues, verified public officials, and formal complaint briefs.'}
           </p>
         </div>
 
@@ -134,6 +144,81 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
           Report Civic Issue
         </button>
       </div>
+
+      {/* Prominent Emergency & Disaster Pathway on Overview */}
+      {!onlyMine && onOpenDisaster && (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-red-200 bg-red-50/70 px-4 py-3.5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-700 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-950">
+                Emergency & Disaster Response
+              </p>
+              <p className="text-xs text-red-900">
+                Access verified 112 / 101 / 108 emergency helplines and authoritative NDMA / Red
+                Cross safety protocols.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenDisaster}
+            className="rounded-md bg-red-700 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-red-800 whitespace-nowrap shrink-0"
+          >
+            Open Disaster Module
+          </button>
+        </div>
+      )}
+
+      {/* Offline Saved Drafts Section */}
+      {localDrafts.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+              Locally Archived Offline Drafts ({localDrafts.length})
+            </h2>
+            <span className="text-xs text-slate-500">Stored in browser cache</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {localDrafts.map((draft) => (
+              <div
+                key={draft.localId}
+                className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 py-2.5 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-900 truncate">
+                    {draft.title}
+                  </p>
+                  <p className="font-mono text-[11px] text-slate-500 tabular-nums">
+                    Saved {new Date(draft.savedAt).toLocaleString()} · {draft.complaintFormat}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {onResumeDraft && (
+                    <button
+                      type="button"
+                      onClick={() => onResumeDraft(draft)}
+                      className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Resume Draft
+                    </button>
+                  )}
+                  {onDeleteDraft && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteDraft(draft.localId)}
+                      aria-label="Delete saved draft"
+                      className="rounded border border-slate-200 p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-700"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 4-Column Metric Strip */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -347,6 +432,11 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
                   <p className="mt-1 text-xs text-slate-600">
                     {activeReport.address} · {activeReport.wardName} ({activeReport.district})
                   </p>
+                  {activeReport.evidenceHash && (
+                    <p className="mt-1.5 font-mono text-[11px] text-slate-500 break-all">
+                      SHA-256: {activeReport.evidenceHash}
+                    </p>
+                  )}
                 </div>
 
                 {resolveReportMediaUrl(activeReport) && (
@@ -402,15 +492,17 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
                             <p className="font-medium text-slate-900 truncate">{off.name}</p>
                             <p className="text-slate-500 truncate">{off.designation}</p>
                           </div>
-                          <a
-                            href={`mailto:${off.email}?subject=${encodeURIComponent(
-                              activeReport.draftSubject
-                            )}&body=${encodeURIComponent(activeReport.draftBody)}`}
-                            className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-                          >
-                            <Mail className="h-3 w-3" />
-                            Email
-                          </a>
+                          {off.email && (
+                            <a
+                              href={`mailto:${off.email}?subject=${encodeURIComponent(
+                                activeReport.draftSubject
+                              )}&body=${encodeURIComponent(activeReport.draftBody)}`}
+                              className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                            >
+                              <Mail className="h-3 w-3" />
+                              Email
+                            </a>
+                          )}
                         </div>
                       );
                     })}
