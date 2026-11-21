@@ -83,6 +83,30 @@ A message moving through the system should have an explicit delivery state, such
 - Label synthetic, demonstration, stale, partial, or unverified data clearly.
 - Minimize collection and retention of personal data and protect locally stored incident information.
 
+## Native Android application
+
+The native Android client is being introduced under `android/` as a standalone Gradle project. The initial implementation includes:
+
+- Kotlin and Jetpack Compose citizen-facing emergency screen.
+- Room-backed local incident persistence.
+- SOS incident creation with category, description, timestamp, and optional device location.
+- Runtime permission requests for location and nearby-device capabilities.
+- BLE hardware and adapter capability inspection.
+
+The current Android foundation **does not yet broadcast SOS messages, perform BLE/Wi-Fi peer discovery or relay, connect to rescue agencies, or invoke Gemini**. Those capabilities must not be represented as operational until their implementations and device-level tests exist.
+
+### Build the Android client
+
+Open the `android/` directory in Android Studio, install the Android SDK platform 35 and JDK 17, then sync and run the `app` configuration on an Android device or emulator.
+
+A local Gradle installation can also build it from the `android/` directory:
+
+```bash
+gradle :app:assembleDebug
+```
+
+The project currently has no committed Gradle wrapper. A wrapper should be added before CI or reproducible command-line builds are configured.
+
 ## Intended Android architecture
 
 The product target is a native Android application built with Kotlin and Jetpack Compose. The architecture is organized around feature modules and reusable core services.
@@ -110,11 +134,11 @@ The product target is a native Android application built with Kotlin and Jetpack
   :rescue-coordination
 ```
 
-The local data layer supports offline incident handling. A backend may provide account services, live authority-source connectors, and synchronization, but it must not be a prerequisite for local peer communication.
+The current Android implementation is a single application module with internal package boundaries. The intended backend remains a modular monolith; Gemini credentials must stay server-side and must never be embedded in the APK. A backend may provide account services, live authority-source connectors, AI-assisted workflows, and synchronization, but it must not be a prerequisite for local peer communication.
 
 ## Implementation status
 
-This repository has evolved from an early interface prototype toward the Android product described above. The existing browser-based interface is a prototype/reference and is **not** the target production client. The native Android application, live authority integrations, and CEMN transport/routing must be treated as incomplete until implemented and verified.
+This repository contains the original browser-based interface prototype/reference and the first native Android foundation under `android/`. The Android foundation currently supports local SOS capture and persistence; it is not yet a complete emergency broadcast system. Live authority integrations, Gemini-backed emergency assistance, BLE/Wi-Fi transport, multi-hop CEMN routing, responder registration, and agency delivery remain incomplete until implemented and verified.
 
 Do not interpret prototype screens, sample records, peer counts, connection indicators, alert feeds, or delivery states as live operational data. A feature is complete only when its implementation and acceptance tests demonstrate the claimed behavior.
 
