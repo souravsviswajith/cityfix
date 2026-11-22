@@ -7,7 +7,9 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server.ts",
-    "lint": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck",
+    "check": "npm run typecheck && npm run build"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",
