@@ -2,118 +2,347 @@
 
 **See the problem. Report it. Reach the responsible authority.**
 
-CityFix is an Android-first civic reporting and disaster-awareness platform. It helps citizens document local problems, identify the public authority responsible for an issue, and prepare evidence-backed complaints. A separate disaster-management module supports location-aware emergency reporting and offline coordination when internet connectivity is unreliable or unavailable.
+CityFix is an Android-only civic reporting and disaster-management platform designed to connect citizen-reported problems with the public authorities responsible for them. It combines evidence capture, geolocation, live authority discovery, identity and jurisdiction verification, citizen-reviewed complaint preparation, and a separate disaster-management system with an Android-phone-based emergency coordination network.
 
-> **Product boundary:** CityFix helps citizens report and coordinate. It does not independently dispatch emergency services, guarantee government action, or confirm that a complaint has been officially registered.
+CityFix is not intended to be another form that merely collects a complaint and stops there. Its design connects the full civic reporting path—from observing a problem to identifying the appropriate public office—with a distinct offline-capable incident coordination path for emergencies.
 
-## The problem
+> **Important boundary:** CityFix supports reporting, information discovery, preparedness, and coordination. It does not dispatch emergency services, guarantee government action, or claim that a complaint has been officially registered, acknowledged, or resolved unless a real external integration proves that state.
 
-Reporting a civic issue often requires citizens to know which department, office, or public representative is responsible for a particular location and problem. That information can be fragmented, difficult to verify, or out of date. During emergencies, unreliable connectivity can make it harder to share incident information and coordinate locally.
+---
 
-CityFix aims to reduce these barriers through location-aware reporting, authority discovery, structured complaint preparation, and resilient emergency communication.
+## Contents
 
-## Core capabilities
+- [Why CityFix](#why-cityfix)
+- [What makes CityFix different](#what-makes-cityfix-different)
+- [Product scope](#product-scope)
+- [Civic reporting workflow](#civic-reporting-workflow)
+- [Authority discovery and verification](#authority-discovery-and-verification)
+- [Complaint generation and delivery semantics](#complaint-generation-and-delivery-semantics)
+- [Disaster Management](#disaster-management)
+- [CityFix Emergency Mesh Network (CEMN)](#cityfix-emergency-mesh-network-cemn)
+- [System architecture](#system-architecture)
+- [Trust, privacy, and security](#trust-privacy-and-security)
+- [Technology direction](#technology-direction)
+- [Repository structure](#repository-structure)
+- [Implementation status](#implementation-status)
+- [Build and development](#build-and-development)
+- [Validation and acceptance scenarios](#validation-and-acceptance-scenarios)
+- [Documentation](#documentation)
+- [Project principles and limitations](#project-principles-and-limitations)
 
-### 1. Civic issue reporting
+## Why CityFix
 
-- Capture or select photographs and videos documenting an issue.
-- Attach geographic coordinates with the citizen's permission.
-- Record the issue category, description, time, and supporting evidence.
-- Keep the citizen in control of the report and its sharing.
+Citizens can often identify a local problem but cannot easily determine which department, elected representative, administrative office, or official is responsible for it. Authority information may be fragmented across portals and documents, while jurisdiction boundaries and contact details can change. A complaint form alone does not solve the authority-discovery problem.
 
-### 2. Responsible authority discovery
+Emergencies create a different problem: internet connectivity may be intermittent or unavailable precisely when people need to share incident information. A conventional online-only workflow cannot be assumed to remain available.
 
-CityFix distinguishes two questions:
+CityFix addresses these problems through two connected but distinct product areas:
 
-- **Political representation:** Who represents this area?
-- **Administrative responsibility:** Which department, office, or official is responsible for this issue?
+1. **Civic accountability:** document a local issue, establish its geographic context, identify the relevant political and administrative authorities, verify available records, and prepare a complaint the citizen can review.
+2. **Disaster management:** create structured incident reports, surface verified emergency information, and support local device-to-device coordination when normal connectivity is disrupted.
 
-Authority information is intended to be retrieved from live, attributable sources rather than treated as a permanently static directory. Each result should retain source provenance, retrieval time, jurisdiction, and verification status.
+## What makes CityFix different
 
-A name, designation, jurisdiction, or contact detail must not be presented as verified unless the underlying source supports it. If reliable official data is unavailable, CityFix should say so and provide the relevant official source or portal where possible.
+CityFix is designed around the complete workflow and the reliability of the information—not just complaint submission.
 
-### 3. Complaint preparation
+| Common limitation in a basic reporting workflow | CityFix design objective |
+|---|---|
+| Collects a complaint but leaves the citizen to find the correct office | Resolve authority candidates from issue type and location |
+| Treats elected representatives and implementing departments as interchangeable | Separates political representation from administrative responsibility |
+| Shows a static list of names and phone numbers | Retrieves attributable records and exposes source, freshness, and verification status |
+| Treats a generated message as a submitted complaint | Separates draft, citizen approval, handoff, receipt, acknowledgement, and resolution |
+| Requires continuous internet access | Preserves local incident capture and queues synchronization |
+| Treats emergency reporting as another form or chat feed | Uses a dedicated incident-management workflow and structured SOS records |
+| Displays nearby devices as if that alone were a working mesh | Requires application-level routing, store-and-forward, deduplication, expiry, and delivery evidence |
+| Treats every nearby user as a responder | Separates citizens, volunteers, verified responders, and official agency actions |
 
-- Generate a structured complaint or reporting draft from citizen-provided details.
-- Include the issue description, location, evidence references, and relevant authority information.
-- Allow the citizen to review and edit the draft before sharing.
-- Support appropriate channels such as email or document export where available.
+These are CityFix's intended product and engineering distinctions. They are not claims that every capability is already implemented or that no other product has similar features.
 
-Draft generation is not the same as official submission. CityFix must not claim that a government system has received, registered, acknowledged, or resolved a complaint unless a real integration confirms that state.
+## Product scope
 
-### 4. Disaster management
+**Client scope:** native Android application only. There is no iOS application or CityFix web application in the current product scope. A public landing page is a separate project/buildathon deliverable, not a second application client.
 
-Disaster management is a dedicated operational module—not a chat room or social feed. It brings together:
+### Civic reporting modules
 
-- Location-aware incident reporting and situational awareness.
-- Clear separation of citizen-reported incidents and official alerts.
-- Verified emergency contact information and reviewed safety guidance.
-- Preparedness information and location-relevant guidance.
-- Local incident coordination when internet access is degraded or unavailable.
+1. **Photo and media capture**
+   - Capture or select photo/video evidence.
+   - Preview, remove, and choose which media to attach.
+   - Preserve relevant capture metadata where available.
+   - Keep media upload state separate from report state.
 
-Emergency numbers and safety instructions must be checked against current authoritative sources. CityFix does not replace emergency services, medical professionals, or official disaster-management agencies.
+2. **Geo-tagging**
+   - Attach coordinates with permission.
+   - Preserve accuracy, timestamp, location age, and acquisition/provenance information.
+   - Resolve jurisdiction only against configured, authoritative, versioned boundary data.
+   - Allow a report draft to continue when location is denied or unavailable, while disclosing the limitation.
+
+3. **Identity and authority discovery**
+   - Retrieve relevant public authority records from live, attributable sources.
+   - Identify both elected representatives and administrative authorities.
+   - Resolve the relationship between issue category, department, office, and jurisdiction.
+
+4. **Verification**
+   - Verify identity, designation/role, role validity where available, jurisdiction, responsibility, and official contact details.
+   - Retain source references, retrieval time, verification time, and limitations.
+   - Return verified, partially verified, unverified, or unavailable results rather than filling gaps with guesses.
+
+5. **Complaint preparation**
+   - Assemble citizen description, issue category, location, media references, and authority context.
+   - Use AI as an assistive drafting layer when configured.
+   - Require the citizen to review and edit before sharing or exporting.
+
+### Separate Disaster Management module
+
+Disaster Management is not an ordinary civic complaint screen, a general chat room, or a social feed. It is a dedicated emergency information and incident-coordination capability covering:
+
+- Structured citizen SOS and incident reporting.
+- Location-aware situational awareness and offline map capability as implemented.
+- A clear distinction between citizen-reported incidents and official government alerts.
+- Verified emergency contacts and source-backed safety guidance.
+- Preparedness information and incident-specific safety instructions.
+- Local coordination and deferred synchronization during degraded connectivity.
+- Explicit status for internet connectivity, peer connectivity, and message delivery.
+
+CityFix does not replace emergency services, medical professionals, police, fire and rescue services, or official disaster-management authorities.
+
+## Civic reporting workflow
+
+The intended end-to-end flow is:
+
+```mermaid
+flowchart TD
+    A[Citizen observes a civic issue] --> B[Capture photo or video]
+    B --> C[Attach location, accuracy and timestamp]
+    C --> D[Save report draft locally]
+    D --> E[Discover authorities using issue + location]
+    E --> F[Resolve political representation]
+    E --> G[Resolve administrative responsibility]
+    F --> H[Verify identity, role and jurisdiction]
+    G --> H
+    H --> I{Evidence sufficient?}
+    I -->|Yes| J[Present verified records with sources]
+    I -->|Partial or no| K[Show partial, unverified or unavailable]
+    J --> L[Prepare complaint draft]
+    K --> L
+    L --> M[Citizen reviews and edits]
+    M --> N{Citizen approves sharing?}
+    N -->|No| O[Keep editable local draft]
+    N -->|Yes| P[Share or export through selected channel]
+    P --> Q[Record only provable delivery state]
+```
+
+Authority discovery is not a prerequisite for preserving evidence. If official authority data or jurisdiction boundaries are unavailable, the citizen's report can remain a draft; CityFix must not invent an official to complete the workflow.
+
+## Authority discovery and verification
+
+CityFix keeps two authority dimensions separate:
+
+- **Political representation — who represents this area?** Elected representatives associated with the relevant constituency or local-government area.
+- **Administrative responsibility — who is responsible for this issue?** The department, office, agency, or public official with operational responsibility for the issue category and jurisdiction.
+
+An authority lookup result is a candidate record, not automatically a verified identity.
+
+A record should carry, where available:
+
+- Canonical identity and designation.
+- Office, department, and role.
+- Role validity/effective dates.
+- Jurisdiction and issue responsibility.
+- Official contact information.
+- Source URL or source identifier.
+- Retrieval and verification timestamps.
+- Verification outcome, confidence/limitations, and freshness.
+
+**Live data is the intended source of truth.** A static local cache may improve availability, but it must carry provenance and freshness metadata and must never be silently presented as current official truth. If a source is unavailable, the system must return an explicit unavailable or partial result.
+
+## Complaint generation and delivery semantics
+
+AI may help transform a citizen's description into a clear, structured complaint. It may assist with categorization, summarization, translation, and drafting. It must not invent facts, officials, legal obligations, response deadlines, or government commitments.
+
+The citizen remains the decision-maker:
+
+1. Review the evidence and authority context.
+2. Review and edit the generated complaint.
+3. Explicitly approve the selected sharing action.
+4. Choose an available channel, such as email handoff or document export.
+
+These states are not interchangeable:
+
+| State | What it proves |
+|---|---|
+| Draft | A complaint exists as editable content |
+| Approved | The citizen approved the content for sharing |
+| Handoff/send attempted | CityFix initiated the selected external action |
+| Received | The target system or recipient provided a verifiable receipt |
+| Acknowledged | The responsible recipient returned a verifiable acknowledgement |
+| Resolved | An authorized workflow recorded resolution with evidence |
+
+Opening an email composer, exporting a PDF, or generating a complaint does not prove official submission. Government ERP/API submission and acknowledgement can only be claimed after a real, configured integration confirms them.
+
+## Disaster Management
+
+The disaster module supports structured incident information and local coordination. It must distinguish the source and authority of every alert or status.
+
+### Incident and SOS record
+
+A structured SOS may contain:
+
+- Stable incident/message identifier.
+- Incident category and short description.
+- GPS coordinates, accuracy, and capture timestamp when permission is granted.
+- Optional photo/video evidence.
+- Optional callback/contact information, subject to consent.
+- Creation time, expiry, and delivery state.
+- Origin and integrity/authentication metadata when implemented.
+
+Precise location, contact information, and media must not be exposed indiscriminately. Nearby citizens may receive limited emergency details; privileged details are restricted to authorized responders under an implemented access policy.
+
+### Recipient and trust classes
+
+| Participant | Permitted meaning |
+|---|---|
+| Citizen | Creates or relays a citizen-reported incident |
+| Volunteer | Offers or performs a clearly scoped volunteer action |
+| Verified responder | Holds an authenticated, authorized responder role |
+| Official agency | Acts only through a real configured official channel or integration |
+
+A nearby phone is not automatically a responder. An unverified device cannot claim official status, issue authoritative evacuation instructions, acknowledge on behalf of an agency, or close an incident.
+
+### Incident lifecycle
+
+```text
+SOS created
+  → queued locally
+  → relayed by a peer (if a valid transport exists)
+  → received by a target device/service
+  → acknowledged by an authorized responder
+  → response in progress (only with evidence)
+  → resolved with evidence (only by an authorized workflow)
+```
+
+A relay is not proof of final delivery. Receipt is not proof of acknowledgement. Acknowledgement is not proof of rescue or resolution.
 
 ## CityFix Emergency Mesh Network (CEMN)
 
-CEMN is the Android-phone-to-Android-phone communication layer supporting local disaster coordination when normal connectivity is disrupted.
+CEMN is the Android-phone-to-Android-phone communication layer for structured emergency coordination when ordinary internet connectivity is degraded or unavailable. It is an application-level store-and-forward system, not simply a Bluetooth connection indicator.
 
-**Transport scope**
-- Bluetooth Low Energy (BLE) for nearby device discovery and suitable low-bandwidth exchanges.
-- Wi-Fi Direct or Wi-Fi Aware for peer communication where the device supports it.
-- Application-level routing and store-and-forward delivery across participating phones.
-- Local persistence so messages can be retried or synchronized when connectivity returns.
+### Transport model
 
-BLE and Wi-Fi APIs provide communication links; they do not create a complete multi-hop mesh by themselves. CEMN must implement message identity, duplicate suppression, expiry (TTL), routing, delivery acknowledgements, and appropriate authentication and encryption.
+- **Bluetooth Low Energy (BLE):** nearby discovery and suitable low-bandwidth exchanges.
+- **Wi-Fi Direct:** peer-to-peer data transfer where supported.
+- **Wi-Fi Aware:** peer discovery/data paths where device and OS support are available.
+- **Local persistence:** durable incident/message queue for retry and deferred synchronization.
+- **Optional backend sync gateway:** synchronizes records when internet becomes available; it is not a prerequisite for local peer communication.
 
-**Platform constraints**
-- Android devices only; no dedicated LoRa gateway or external mesh hardware is required.
-- Wi-Fi Aware support varies by device and must be capability-checked.
-- Android background-execution and battery restrictions can interrupt discovery or relay. Continuous availability cannot be guaranteed.
-- Internet connectivity and mesh availability are separate states and must be displayed independently.
+Android radio APIs provide links, not a complete multi-hop mesh. CEMN must implement the application-level protocol:
 
-A message moving through the system should have an explicit delivery state, such as **Queued → Relayed → Received → Acknowledged**. Sending or relaying a message does not prove that a responder or emergency service received it.
+- Stable message and incident IDs.
+- Typed and versioned message schemas.
+- Origin authentication and integrity protection.
+- Encryption and authorization appropriate to the recipient.
+- TTL/expiry and queue limits.
+- Duplicate suppression and idempotent processing.
+- Routing and store-and-forward behavior.
+- Receive and acknowledgement semantics.
+- Reconnection and synchronization without duplicate incidents.
+- Audit-friendly state transitions.
 
-## Trust, privacy, and safety principles
+### Operating modes
 
-- Request location and media permissions only when needed and explain their use.
-- Share precise location only through an explicit user action or an authorized emergency workflow.
-- Keep citizen reports distinct from official agency alerts and verified responder updates.
-- Do not allow an unverified device or user to claim official responder status, issue authoritative evacuation orders, or mark an incident resolved.
-- Preserve source attribution and freshness metadata for authority records, alerts, and emergency guidance.
-- Label synthetic, demonstration, stale, partial, or unverified data clearly.
-- Minimize collection and retention of personal data and protect locally stored incident information.
+| Mode | Meaning |
+|---|---|
+| Connected | Internet-backed services are available; local peer capability is tracked separately |
+| Degraded | Internet is intermittent or unavailable; locally available peer transport and queued synchronization may be used |
+| Disconnected | No usable internet path; local mesh operation is possible only if compatible peers and transports are actually available |
 
-## Native Android application
+**Internet availability and mesh availability are independent state dimensions.** No internet does not mean that a mesh exists. A BLE adapter being present does not mean a peer is connected or a message can be delivered.
 
-The native Android client is being introduced under `android/` as a standalone Gradle project. The initial implementation includes:
+### Android platform constraints
 
-- Kotlin and Jetpack Compose citizen-facing emergency screen.
-- Room-backed local incident persistence.
-- SOS incident creation with category, description, timestamp, and optional device location.
-- Runtime permission requests for location and nearby-device capabilities.
-- BLE hardware and adapter capability inspection.
+- Android devices only; no dedicated LoRa hardware or external mesh gateway is part of the design.
+- Wi-Fi Aware is not supported on every Android device.
+- BLE and Wi-Fi behavior varies by hardware, OS version, permissions, radio state, and environment.
+- Background execution, battery optimization, process death, and permission revocation can interrupt discovery and relay.
+- Continuous background relay cannot be guaranteed.
+- UI must show actual permission, radio, peer, queue, and delivery states—not simulated peer counts or optimistic status labels.
 
-The current Android foundation **does not yet broadcast SOS messages, perform BLE/Wi-Fi peer discovery or relay, connect to rescue agencies, or invoke Gemini**. Those capabilities must not be represented as operational until their implementations and device-level tests exist.
+## System architecture
 
-### Build the Android client
+### High-level component flow
 
-Open the `android/` directory in Android Studio, install the Android SDK platform 35 and JDK 17, then sync and run the `app` configuration on an Android device or emulator.
+```mermaid
+flowchart TB
+    Citizen([Citizen / Authorized Participant])
+    App[Native Android App<br/>Kotlin + Jetpack Compose]
+    subgraph Client[On-device capabilities]
+      Capture[Media capture]
+      Geo[Location and geo-tagging]
+      Local[(Encrypted local storage / queue)]
+      Disaster[Disaster incident workflow]
+      Mesh[CEMN: BLE + Wi-Fi peer transports]
+    end
+    subgraph Backend[Optional backend and sync boundary]
+      API[Authenticated API]
+      Auth[Identity and authorization]
+      Reports[Report and incident services]
+      Authority[Authority source orchestrator]
+      Jurisdiction[Versioned GIS / jurisdiction resolver]
+      AI[Server-side AI drafting]
+      Audit[Audit and event records]
+    end
+    Sources[Official authority data sources]
+    Alerts[Official alert sources]
+    Share[Citizen-approved email / export / external channel]
 
-A local Gradle installation can also build it from the `android/` directory:
-
-```bash
-gradle :app:assembleDebug
+    Citizen --> App
+    App --> Capture
+    App --> Geo
+    App --> Disaster
+    Capture --> Local
+    Geo --> Local
+    Disaster --> Local
+    Disaster <--> Mesh
+    Local <-->|Deferred sync| API
+    App <-->|Authenticated requests| API
+    API --> Auth
+    API --> Reports
+    API --> Authority
+    API --> Jurisdiction
+    API --> AI
+    API --> Audit
+    Authority --> Sources
+    Disaster --> Alerts
+    App -->|Review and explicit approval| Share
 ```
 
-The project currently has no committed Gradle wrapper. CI installs Gradle 8.9 explicitly for the Android debug build; a committed Gradle wrapper remains a reproducibility improvement.
+The backend is an optional synchronization and integration boundary for local emergency communication. Local incident capture and peer communication must not depend on a live backend.
 
-## Intended Android architecture
+### Backend deployment model
 
-The product target is a native Android application built with Kotlin and Jetpack Compose. The architecture is organized around feature modules and reusable core services.
+The target backend is a **modular monolith**, not a distributed microservice fleet. It keeps operational complexity low while enforcing internal domain boundaries.
+
+Target bounded modules:
+
+- `identity` — authentication, account lifecycle, role assignment.
+- `authority` — source connectors and authority record normalization.
+- `jurisdiction` — versioned geographic boundaries and resolution.
+- `reports` — civic report drafts, approvals, and sharing state.
+- `media` — upload authorization, metadata, retention, and access.
+- `disaster` — incident and SOS lifecycle.
+- `cemn` — optional synchronization, event ingestion, and relay metadata.
+- `ai` — server-side model calls and structured drafting.
+- `notifications` — configured delivery providers and notification state.
+- `audit` — provenance, privileged actions, and state-transition records.
+
+### Android target package boundaries
+
+The current client may keep a single Gradle application module while maintaining internal package boundaries. The following is the intended logical decomposition, not a claim that every entry already exists as a Gradle module:
 
 ```text
 :app
+:core:domain
 :core:database
+:core:media
 :core:location
 :core:network
 :core:security
@@ -122,63 +351,212 @@ The product target is a native Android application built with Kotlin and Jetpack
   :transport
   :routing
   :message-queue
+  :deduplication
   :synchronization
-:feature:auth
-:feature:media
-:feature:authority
-:feature:complaint
+:feature:report
+  :evidence
+  :geotagging
+  :authority-discovery
+  :authority-verification
+  :complaint
 :feature:disaster
   :incident
   :sos
   :offline-map
+  :alerts
+  :emergency-resources
   :rescue-coordination
+:data
+:integrations
+  :gis-provider
+  :authority-sources
+  :ai-drafting
 ```
 
-The current Android implementation is a single application module with internal package boundaries. The backend is a modular-monolith target; Gemini credentials must stay server-side and must never be embedded in the APK. The current API deliberately returns `503 CAPABILITY_NOT_CONFIGURED` for authentication, authority lookup, jurisdiction, and report operations until their required providers, durable storage, authorization, and audit controls are implemented. This is a fail-closed safety measure, not a completed backend. Gemini drafting is available only when `GEMINI_API_KEY` and `GEMINI_MODEL` are configured on the server. A backend may provide account services, live authority-source connectors, AI-assisted workflows, and synchronization, but it must not be a prerequisite for local peer communication.
+### Important data boundaries
+
+- Citizen input and media are untrusted until validated.
+- GPS is a device observation with accuracy and freshness limits.
+- Authority records are external claims until verified against attributable sources.
+- AI output is draft content, not authoritative evidence.
+- Peer messages are untrusted until schema, authenticity, integrity, expiry, and authorization checks pass.
+- External email/export handoff is not government acknowledgement.
+
+## Trust, privacy, and security
+
+Security and privacy are architectural requirements, not optional presentation features.
+
+- Request camera, media, location, and nearby-device permissions only when needed and explain why.
+- Do not silently substitute default coordinates or fabricate a jurisdiction.
+- Share precise location, contact details, and media only through explicit, purpose-bound actions and authorized workflows.
+- Keep citizen reports, volunteer actions, verified responder actions, and official agency actions distinct.
+- Enforce authentication and server-side authorization for protected report and responder operations.
+- Assign elevated responder/coordinator roles through a trusted administrative process, not user-controlled profile fields.
+- Keep Gemini and other provider credentials on the server; never embed secrets in the APK or browser bundle.
+- Apply schema validation, quotas, rate limits, abuse controls, secure transport, and audit logging before production exposure.
+- Retain source provenance and freshness for authority data and official alerts.
+- Minimize personal-data collection and define retention/deletion policies.
+- Label sample, synthetic, stale, partial, and unverified information.
+- Do not infer operational success from a build, API response, radio capability, or UI state.
+
+### AI responsibility boundary
+
+AI may assist with issue classification, description structuring, complaint drafting, translation, and summarization of source-backed information. Deterministic application logic and attributable sources must control identity verification, jurisdiction, authorization, routing, message delivery, official alert status, and incident resolution. AI must not independently certify officials, responders, or emergency outcomes.
+
+## Technology direction
+
+| Area | Direction |
+|---|---|
+| Android client | Kotlin, Jetpack Compose, Material 3 |
+| Local persistence | Room; encrypted storage for sensitive data where required |
+| Media | CameraX and Android media APIs |
+| Location | Android location APIs with accuracy/freshness metadata |
+| Deferred work | WorkManager for eligible deferred synchronization |
+| Nearby transport | BLE, Wi-Fi Direct, Wi-Fi Aware with capability detection |
+| Mesh protocol | Application-level typed messages, queues, routing, TTL, deduplication, acknowledgements, security |
+| Backend | Kotlin/Ktor or the repository's existing server stack, organized as a modular monolith |
+| AI | Gemini through server-side integration only |
+| Geographic data | Authoritative GIS/jurisdiction boundaries with versioning |
+| Authority data | Live official sources/connectors with provenance and freshness |
+| Testing | Unit/contract/integration tests plus real multi-device Android tests |
+
+Technology choices are subject to repository implementation and compatibility checks. A listed technology is a direction, not proof of an integrated production dependency.
+
+## Repository structure
+
+Relevant areas in this repository:
+
+```text
+.
+├── android/                         # Native Android client foundation
+├── docs/
+│   ├── ARCHITECTURE.md              # Detailed logical architecture
+│   ├── DIAGRAMS.md                  # Mermaid architecture and workflow diagrams
+│   ├── architecture/
+│   │   └── disaster-management-gps-cemn.md
+│   └── security/
+│       └── implementation-baseline.md
+├── .github/workflows/               # CI workflows
+└── README.md
+```
+
+The repository also contains an earlier browser-based interface prototype/reference. It is not the supported product client and prototype screens must not be treated as evidence of live backend, authority, alert, or mesh behavior.
 
 ## Implementation status
 
-This repository contains the original browser-based interface prototype/reference and the first native Android foundation under `android/`. The Android foundation currently supports local SOS capture and persistence; it is not yet a complete emergency broadcast system. Live authority integrations, Gemini-backed emergency assistance, BLE/Wi-Fi transport, multi-hop CEMN routing, responder registration, and agency delivery remain incomplete until implemented and verified.
+The status below distinguishes existing foundations from intended capabilities. Update it whenever code and tests change.
 
-Do not interpret prototype screens, sample records, peer counts, connection indicators, alert feeds, or delivery states as live operational data. A feature is complete only when its implementation and acceptance tests demonstrate the claimed behavior.
+| Capability | Current status |
+|---|---|
+| Android native application foundation | Kotlin/Compose foundation exists |
+| Local SOS creation and persistence | Implemented in the Android foundation |
+| Location permission and capability handling | Foundation exists; location freshness/accuracy semantics require validation |
+| BLE hardware/adapter capability inspection | Implemented; this is not peer discovery or message relay |
+| Photo/video capture workflow | Product requirement; end-to-end native implementation must be verified |
+| Live authority source integrations | Not configured/complete |
+| Versioned authoritative jurisdiction/GIS data | Not configured/complete |
+| Authority identity/role/contact verification | Target workflow; live verification connectors incomplete |
+| Citizen-reviewed complaint drafting | Target workflow; verify configured AI and sharing path before claiming operational |
+| Firebase-backed authentication/report controls | Present in the current server baseline; requires further security review and production hardening |
+| Gemini server integration | Conditional on server-side configuration; output remains a draft |
+| BLE/Wi-Fi peer discovery and transport | Not yet demonstrated end to end |
+| Multi-hop CEMN routing/store-and-forward | Not yet demonstrated end to end |
+| Message signing/encryption and responder authentication | Not yet demonstrated end to end |
+| Official agency integrations and dispatch | Not implemented |
+| Official receipt/acknowledgement/resolution | Not available without a real integrated authority workflow |
+| Offline maps and operational field coordination | Target capability; verify implementation before claiming complete |
 
-## Initial CEMN acceptance scenario
+A successful TypeScript check, APK assembly, or UI demonstration does not prove physical-device radio behavior, multi-hop delivery, source verification, agency integration, or production security.
 
-A minimum offline-relay test uses three Android phones:
+## Build and development
 
-1. Phone A creates an SOS incident.
-2. Phone B receives and relays the message.
-3. Phone C receives it while all three phones have internet disabled.
-4. The UI reports the actual message state at each device.
-5. Internet is restored and queued data synchronizes without creating duplicate incidents.
+### Android prerequisites
 
-The test must also cover expired messages, duplicate delivery, unavailable permissions, unsupported transports, process termination, and reconnection.
+- Android Studio with Android SDK Platform 35.
+- JDK 17.
+- Gradle 8.9 (until a committed Gradle wrapper is available).
+- Android device or emulator for UI and local persistence testing.
 
-## Development principles
+### Build
 
-- Android-only product scope.
-- Offline-first behavior for incident capture and local coordination.
-- Live, source-attributed authority data; no invented officials or contact details.
-- Political representation and administrative responsibility remain distinct.
-- Explicit verification and delivery states; no simulated operational claims.
-- Citizen review before complaint sharing.
-- Security, privacy, accessibility, and graceful degradation by design.
+From the repository root:
+
+```bash
+cd android
+gradle :app:assembleDebug
+```
+
+Open the `android/` directory in Android Studio to sync and run the app. The project currently has no committed Gradle wrapper; adding and validating a wrapper is a reproducibility task.
+
+### Backend and provider configuration
+
+Provider-backed capabilities must remain disabled or return explicit unavailable states until the required configuration, authentication, authorization, and source validation are in place.
+
+- Firebase configuration is required for the current authentication/report path.
+- Configure `GEMINI_API_KEY` and `GEMINI_MODEL` only in the server environment if Gemini drafting is enabled.
+- Government authority and GIS connectors must use attributable official sources and versioned boundary data.
+- SMS/WhatsApp OTP requires a configured provider; WhatsApp requires approved Meta Business configuration and credentials.
+- Agency notifications or delivery require a real approved integration or verified operational channel.
+
+Never place credentials in source control, app resources, or client-side bundles.
+
+## Validation and acceptance scenarios
+
+### Civic reporting
+
+- Capture a report with and without media.
+- Deny location permission and confirm that the report remains a draft with a clear location limitation.
+- Confirm no fallback coordinates are silently substituted.
+- Test issue + jurisdiction resolution against known versioned boundary fixtures.
+- Verify that political and administrative authority records remain distinct.
+- Test verified, partially verified, stale, unavailable, and conflicting source records.
+- Confirm citizen review is required before sharing.
+- Confirm a handoff is not displayed as official receipt or acknowledgement.
+
+### CEMN minimum three-device test
+
+1. Prepare three compatible Android phones: A, B, and C.
+2. Disable internet on all three phones.
+3. Phone A creates a structured SOS incident.
+4. Phone B receives and relays the message using the implemented peer transport.
+5. Phone C receives the same incident.
+6. Verify stable IDs, integrity checks, TTL, duplicate suppression, and actual delivery states.
+7. Restore internet and synchronize queued records without creating duplicate incidents.
+8. Repeat with expired messages, missing permissions, unsupported transports, process termination, and reconnection.
+
+A JVM unit test cannot prove Bluetooth/Wi-Fi radio behavior, Android lifecycle behavior, or real multi-hop delivery. Those require physical-device tests and recorded build/device details.
+
+### Emergency safety and trust
+
+- Distinguish citizen-generated reports from official alerts.
+- Verify emergency contacts and safety guidance against current authoritative sources.
+- Confirm that only authorized responders can acknowledge privileged workflows or close incidents.
+- Confirm that a relay, receipt, acknowledgement, and resolution are separate states.
+- Confirm that emergency dial actions launch the appropriate system dial intent when implemented.
 
 ## Documentation
 
-- [System architecture](docs/ARCHITECTURE.md) — logical layers, functional modules, trust boundaries, and implementation status.
+- [System architecture](docs/ARCHITECTURE.md) — functional modules, logical layers, workflows, trust boundaries, and implementation status.
 - [Architecture diagrams and flowcharts](docs/DIAGRAMS.md) — system context, civic reporting, authority verification, CEMN delivery, and trust boundaries.
-- [Disaster management, GPS, and CEMN architecture](docs/architecture/disaster-management-gps-cemn.md)
-- [Security and implementation baseline](docs/security/implementation-baseline.md)
+- [Disaster Management, GPS, and CEMN architecture](docs/architecture/disaster-management-gps-cemn.md) — offline-first emergency coordination and Android mesh constraints.
+- [Security and implementation baseline](docs/security/implementation-baseline.md) — current security controls, limitations, and required hardening.
+
+## Project principles and limitations
+
+1. **Truth over appearance:** never display a simulated capability as live.
+2. **Evidence over assumption:** retain source, timestamp, accuracy, and verification status.
+3. **Citizen control:** the citizen reviews and approves complaint content and sharing.
+4. **Authority clarity:** political representation is not the same as administrative responsibility.
+5. **Offline resilience:** local capture and peer communication should not require a backend to be online.
+6. **Explicit trust:** citizens, volunteers, verified responders, and agencies have different permissions.
+7. **Least privilege:** disclose only the data needed for the selected workflow.
+8. **Graceful degradation:** unavailable sources, permissions, or transports must produce honest states.
+9. **Test the real system:** hardware-dependent behavior requires real-device validation.
+10. **No false promises:** CityFix does not claim government action, emergency dispatch, rescue, or incident resolution without verifiable integration evidence.
 
 ## Project
 
 **CityFix**  
 *See the problem. Report it. Reach the responsible authority.*
 
-This project is being developed for the Tutedude Buildathon. Demonstrations must clearly distinguish implemented functionality from prototypes, simulations, and planned integrations.
-
-
-## Security remediation baseline
-
-See [security and implementation status](docs/security/implementation-baseline.md). The current server intentionally disables unconfigured authentication, authority, jurisdiction, and report APIs rather than returning synthetic records or accepting unauthenticated state changes. This repository is not production-ready until those modules are implemented and tested. CI validates TypeScript, builds the web prototype, and assembles the Android debug APK; these checks do not prove emergency relay, agency integration, or production security.
+Developed for the Tutedude Buildathon. Demonstrations must clearly distinguish implemented functionality from prototypes, simulations, and planned integrations.
