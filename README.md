@@ -105,7 +105,7 @@ A local Gradle installation can also build it from the `android/` directory:
 gradle :app:assembleDebug
 ```
 
-The project currently has no committed Gradle wrapper. A wrapper should be added before CI or reproducible command-line builds are configured.
+The project currently has no committed Gradle wrapper. CI installs Gradle 8.9 explicitly for the Android debug build; a committed Gradle wrapper remains a reproducibility improvement.
 
 ## Intended Android architecture
 
@@ -134,7 +134,7 @@ The product target is a native Android application built with Kotlin and Jetpack
   :rescue-coordination
 ```
 
-The current Android implementation is a single application module with internal package boundaries. The intended backend remains a modular monolith; Gemini credentials must stay server-side and must never be embedded in the APK. A backend may provide account services, live authority-source connectors, AI-assisted workflows, and synchronization, but it must not be a prerequisite for local peer communication.
+The current Android implementation is a single application module with internal package boundaries. The backend is a modular-monolith target; Gemini credentials must stay server-side and must never be embedded in the APK. The current API deliberately returns `503 CAPABILITY_NOT_CONFIGURED` for authentication, authority lookup, jurisdiction, and report operations until their required providers, durable storage, authorization, and audit controls are implemented. This is a fail-closed safety measure, not a completed backend. Gemini drafting is available only when `GEMINI_API_KEY` and `GEMINI_MODEL` are configured on the server. A backend may provide account services, live authority-source connectors, AI-assisted workflows, and synchronization, but it must not be a prerequisite for local peer communication.
 
 ## Implementation status
 
@@ -174,3 +174,8 @@ The test must also cover expired messages, duplicate delivery, unavailable permi
 *See the problem. Report it. Reach the responsible authority.*
 
 This project is being developed for the Tutedude Buildathon. Demonstrations must clearly distinguish implemented functionality from prototypes, simulations, and planned integrations.
+
+
+## Security remediation baseline
+
+See [security and implementation status](docs/security/implementation-baseline.md). The current server intentionally disables unconfigured authentication, authority, jurisdiction, and report APIs rather than returning synthetic records or accepting unauthenticated state changes. This repository is not production-ready until those modules are implemented and tested. CI validates TypeScript, builds the web prototype, and assembles the Android debug APK; these checks do not prove emergency relay, agency integration, or production security.
