@@ -100,7 +100,7 @@ private fun CityFixHome(
             result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
             result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         locationMessage = if (locationPermissionGranted) {
-            "Location permission granted. A location fix is requested when creating an SOS."
+            "Location permission granted. A recent cached location fix (up to 2 minutes old) is used when available."
         } else {
             "Location unavailable: grant permission to attach coordinates."
         }
