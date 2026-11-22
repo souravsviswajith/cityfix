@@ -166,7 +166,10 @@ The test must also cover expired messages, duplicate delivery, unavailable permi
 
 ## Documentation
 
+- [System architecture](docs/ARCHITECTURE.md) — logical layers, functional modules, trust boundaries, and implementation status.
+- [Architecture diagrams and flowcharts](docs/DIAGRAMS.md) — system context, civic reporting, authority verification, CEMN delivery, and trust boundaries.
 - [Disaster management, GPS, and CEMN architecture](docs/architecture/disaster-management-gps-cemn.md)
+- [Security and implementation baseline](docs/security/implementation-baseline.md)
 
 ## Project
 
