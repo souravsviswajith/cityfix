@@ -8,11 +8,6 @@ import { WebSocketServer } from 'ws';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import {
   ISSUE_CATEGORIES,
-  PUBLIC_OFFICIALS,
-  WARD_ZONES,
-  evaluateAuthorityVerification,
-  getResponsibleOfficials,
-  identifyJurisdiction,
 } from './src/data/civicDirectory.js';
 import {
   createCivicReportRecord,
@@ -69,10 +64,6 @@ async function isAuthorizedResponder(req: AuthRequest): Promise<{
   tier: string;
 }> {
   if (!req.user) return { allowed: false, tier: 'UNVERIFIED_CITIZEN' };
-  const email = (req.user.email ?? '').toLowerCase();
-  if (email === 'souravsviswajith@gmail.com' && req.user.email_verified) {
-    return { allowed: true, tier: 'OFFICIAL_AGENCY' };
-  }
   const dbUser = await getUserByUid(req.user.uid);
   if (dbUser && (dbUser.role === 'coordinator' || dbUser.role === 'responder')) {
     return {
@@ -121,105 +112,34 @@ async function startServer() {
     }
   });
 
-  // Directory & jurisdiction lookup
-  app.get('/api/directory', (req, res) => {
-    const wardId = typeof req.query.wardId === 'string' ? req.query.wardId : undefined;
-    const category =
-      typeof req.query.category === 'string'
-        ? (req.query.category as IssueCategory)
-        : undefined;
-
-    let officials = PUBLIC_OFFICIALS;
-    if (wardId) {
-      officials = officials.filter((o) => o.wardIds.includes(wardId));
-    }
-    if (category) {
-      officials = officials.filter((o) => o.categories.includes(category));
-    }
-
-    res.json({
-      wards: WARD_ZONES,
-      categories: ISSUE_CATEGORIES,
-      officials,
-    });
-  });
-
-  app.post('/api/jurisdiction/resolve', (req, res) => {
-    const { latitude, longitude, category, wardId } = req.body ?? {};
-    const lat = Number(latitude);
-    const lng = Number(longitude);
-
-    if (Number.isNaN(lat) || Number.isNaN(lng)) {
-      return res.status(400).json({ error: 'Valid latitude and longitude are required.' });
-    }
-
-    const ward = identifyJurisdiction(lat, lng, wardId);
-    const validCategory: IssueCategory = ISSUE_CATEGORIES.some((c) => c.id === category)
-      ? category
-      : 'roads';
-    const officials = getResponsibleOfficials(ward.id, validCategory);
-
-    return res.json({ ward, officials });
-  });
-
-  app.get('/api/v1/authorities/resolve', (req, res) => {
-    const lat = Number(req.query.lat);
-    const lon = Number(req.query.lon);
-    const category =
-      typeof req.query.category === 'string'
-        ? (req.query.category as IssueCategory)
-        : 'roads';
-
-    if (
-      Number.isNaN(lat) ||
-      Number.isNaN(lon) ||
-      lat < -90 ||
-      lat > 90 ||
-      lon < -180 ||
-      lon > 180
-    ) {
-      return res
-        .status(400)
-        .json({ error: 'Valid latitude and longitude required.' });
-    }
-
-    const ward = identifyJurisdiction(lat, lon);
-    const validCategory: IssueCategory = ISSUE_CATEGORIES.some((c) => c.id === category)
-      ? category
-      : 'roads';
-    const officials = getResponsibleOfficials(ward.id, validCategory).map((official) =>
-      evaluateAuthorityVerification(official, ward.id, validCategory)
-    );
-
-    return res.json({
-      jurisdiction: {
-        state: 'Metro State',
-        district: ward.district,
-        localBodyType: ward.localBodyType,
-        localBodyName: ward.localBodyName,
-        wardNumber: ward.code,
-        wardName: ward.name,
-        assemblyConstituency: ward.assemblyConstituency,
-        parliamentaryConstituency: ward.parliamentaryConstituency,
-        formattedAddress: `${ward.name}, ${ward.district}`,
-      },
-      authorities: officials,
-      dataAvailabilityNotice:
-        officials.length === 0
-          ? `No machine-readable government directory is currently connected for ${ward.localBodyName}.`
-          : null,
-    });
-  });
+  // Authority and jurisdiction data are disabled until connected to attributable,
+  // authoritative government sources and versioned GIS boundaries.
+  app.get('/api/directory', (_req, res) =>
+    res.status(503).json({ status: 'UNAVAILABLE', error: 'Authoritative government directory is not configured.' })
+  );
+  app.post('/api/jurisdiction/resolve', (_req, res) =>
+    res.status(503).json({ status: 'UNAVAILABLE', error: 'Authoritative GIS jurisdiction data is not configured.' })
+  );
+  app.get('/api/v1/authorities/resolve', (_req, res) =>
+    res.status(503).json({ status: 'UNAVAILABLE', error: 'Authoritative government directory and GIS data are not configured.' })
+  );
 
   // Civic Reports CRUD backed by Cloud SQL PostgreSQL
-  app.get('/api/reports', async (req, res) => {
+  app.get('/api/reports', requireAuth, async (req: AuthRequest, res) => {
     try {
       const wardId = typeof req.query.wardId === 'string' ? req.query.wardId : undefined;
       const category =
         typeof req.query.category === 'string' ? req.query.category : undefined;
       const status = typeof req.query.status === 'string' ? req.query.status : undefined;
 
-      const reports = await listCivicReports({ wardId, category, status });
+      const dbUser = await getUserByUid(req.user!.uid);
+      const isResponder = dbUser?.role === 'responder' || dbUser?.role === 'coordinator';
+      const reports = await listCivicReports({
+        wardId,
+        category,
+        status,
+        userUid: isResponder ? undefined : req.user!.uid,
+      });
       return res.json({ reports });
     } catch (error) {
       console.error('GET /api/reports failed:', error);
@@ -241,8 +161,12 @@ async function startServer() {
         .json({ error: 'Issue title and description are required to submit a report.' });
     }
 
-    const lat = Number(payload.latitude) || 12.9716;
-    const lng = Number(payload.longitude) || 77.5946;
+    const lat = Number(payload.latitude);
+    const lng = Number(payload.longitude);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 ||
+        !Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: 'Valid incident coordinates are required.' });
+    }
     const category: IssueCategory = ISSUE_CATEGORIES.some(
       (c) => c.id === payload.category
     )
@@ -253,9 +177,6 @@ async function startServer() {
     )
       ? payload.severity
       : 'Moderate';
-
-    const ward = identifyJurisdiction(lat, lng, payload.wardId);
-    const officials = getResponsibleOfficials(ward.id, category);
 
     try {
       const uid = req.user!.uid;
@@ -281,12 +202,12 @@ async function startServer() {
         address:
           typeof payload.address === 'string' && payload.address.trim()
             ? payload.address.trim()
-            : `${ward.name} (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+            : `Coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)}`,
         latitude: lat,
         longitude: lng,
-        wardId: ward.id,
-        wardName: ward.name,
-        district: ward.district,
+        wardId: 'UNRESOLVED',
+        wardName: 'Jurisdiction not verified',
+        district: 'Not verified',
         mediaType:
           payload.mediaType === 'image' || payload.mediaType === 'video'
             ? payload.mediaType
@@ -310,11 +231,11 @@ async function startServer() {
         citizenName: displayName,
         citizenContact: email,
         authChannel: 'Google Sign-In' as AuthChannel,
-        assignedOfficialIds: officials.map((o) => o.id),
+        assignedOfficialIds: [],
         draftSubject:
           typeof payload.draftSubject === 'string' && payload.draftSubject.trim()
             ? payload.draftSubject.trim()
-            : `[${severity.toUpperCase()}] Civic Report: ${title} (${ward.code})`,
+            : `[${severity.toUpperCase()}] Civic Report: ${title} (jurisdiction unverified)`,
         draftBody:
           typeof payload.draftBody === 'string' && payload.draftBody.trim()
             ? payload.draftBody.trim()
@@ -346,6 +267,10 @@ async function startServer() {
     }
 
     try {
+      const authz = await isAuthorizedResponder(req);
+      if (!authz.allowed) {
+        return res.status(403).json({ error: 'Only an administrator-assigned responder or coordinator may change report status.' });
+      }
       const updated = await updateCivicReportStatusRecord(String(id), status);
       if (!updated) {
         return res.status(404).json({ error: 'Civic report not found.' });
@@ -358,8 +283,12 @@ async function startServer() {
   });
 
   // === CityFix Emergency Mesh Network (CEMN) Recovery & Coordination Routes ===
-  app.get('/api/cemn/events', async (_req, res) => {
+  app.get('/api/cemn/events', requireAuth, async (req: AuthRequest, res) => {
     try {
+      const authz = await isAuthorizedResponder(req);
+      if (!authz.allowed) {
+        return res.status(403).json({ error: 'CEMN event and audit records are restricted to verified responders and coordinators.' });
+      }
       const data = await listCemnSyncedEvents();
       return res.json(data);
     } catch (error) {

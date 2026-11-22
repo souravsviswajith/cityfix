@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from './index.ts';
 import { cemnAuditLog, cemnEvents, civicReports, users } from './schema.ts';
 import { SEED_REPORTS } from '../data/civicDirectory.ts';
@@ -59,14 +59,13 @@ export async function getOrCreateUser(
 ) {
   try {
     const safeName = displayName?.trim() || email.split('@')[0] || 'Verified Citizen';
-    const isAdminEmail = email.toLowerCase() === 'souravsviswajith@gmail.com';
     const result = await db
       .insert(users)
       .values({
         uid,
         email,
         displayName: safeName,
-        role: isAdminEmail ? 'coordinator' : 'citizen',
+        role: 'citizen',
       })
       .onConflictDoUpdate({
         target: users.uid,
@@ -144,32 +143,29 @@ export async function listCivicReports(filters?: {
   wardId?: string;
   category?: string;
   status?: string;
+  userUid?: string;
 }): Promise<CivicReport[]> {
   try {
     await seedInitialReportsIfEmpty();
+    const conditions = [];
+    if (filters?.userUid) conditions.push(eq(civicReports.userUid, filters.userUid));
+    if (filters?.wardId && filters.wardId !== 'all') {
+      conditions.push(eq(civicReports.wardId, filters.wardId));
+    }
+    if (filters?.category && filters.category !== 'all') {
+      conditions.push(eq(civicReports.category, filters.category));
+    }
+    if (filters?.status && filters.status !== 'all') {
+      conditions.push(eq(civicReports.status, filters.status));
+    }
+
     const rows = await db
       .select()
       .from(civicReports)
+      .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(civicReports.createdAt));
 
-    return rows
-      .map(toCivicReport)
-      .filter((r) => {
-        if (filters?.wardId && filters.wardId !== 'all' && r.wardId !== filters.wardId) {
-          return false;
-        }
-        if (
-          filters?.category &&
-          filters.category !== 'all' &&
-          r.category !== filters.category
-        ) {
-          return false;
-        }
-        if (filters?.status && filters.status !== 'all' && r.status !== filters.status) {
-          return false;
-        }
-        return true;
-      });
+    return rows.map(toCivicReport);
   } catch (error) {
     console.error('Database listCivicReports failed:', error);
     throw new Error('Unable to load civic reports from database.', { cause: error });
@@ -415,3 +411,4 @@ export async function updateCemnRescueStageInDb(params: {
     });
   }
 }
+
