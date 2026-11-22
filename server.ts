@@ -8,11 +8,6 @@ import { WebSocketServer } from 'ws';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import {
   ISSUE_CATEGORIES,
-  PUBLIC_OFFICIALS,
-  WARD_ZONES,
-  evaluateAuthorityVerification,
-  getResponsibleOfficials,
-  identifyJurisdiction,
 } from './src/data/civicDirectory.js';
 import {
   createCivicReportRecord,
@@ -166,8 +161,12 @@ async function startServer() {
         .json({ error: 'Issue title and description are required to submit a report.' });
     }
 
-    const lat = Number(payload.latitude) || 12.9716;
-    const lng = Number(payload.longitude) || 77.5946;
+    const lat = Number(payload.latitude);
+    const lng = Number(payload.longitude);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 ||
+        !Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: 'Valid incident coordinates are required.' });
+    }
     const category: IssueCategory = ISSUE_CATEGORIES.some(
       (c) => c.id === payload.category
     )
@@ -178,9 +177,6 @@ async function startServer() {
     )
       ? payload.severity
       : 'Moderate';
-
-    const ward = identifyJurisdiction(lat, lng, payload.wardId);
-    const officials = getResponsibleOfficials(ward.id, category);
 
     try {
       const uid = req.user!.uid;
@@ -206,12 +202,12 @@ async function startServer() {
         address:
           typeof payload.address === 'string' && payload.address.trim()
             ? payload.address.trim()
-            : `${ward.name} (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+            : `Coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)}`,
         latitude: lat,
         longitude: lng,
-        wardId: ward.id,
-        wardName: ward.name,
-        district: ward.district,
+        wardId: 'UNRESOLVED',
+        wardName: 'Jurisdiction not verified',
+        district: 'Not verified',
         mediaType:
           payload.mediaType === 'image' || payload.mediaType === 'video'
             ? payload.mediaType
@@ -235,11 +231,11 @@ async function startServer() {
         citizenName: displayName,
         citizenContact: email,
         authChannel: 'Google Sign-In' as AuthChannel,
-        assignedOfficialIds: officials.map((o) => o.id),
+        assignedOfficialIds: [],
         draftSubject:
           typeof payload.draftSubject === 'string' && payload.draftSubject.trim()
             ? payload.draftSubject.trim()
-            : `[${severity.toUpperCase()}] Civic Report: ${title} (${ward.code})`,
+            : `[${severity.toUpperCase()}] Civic Report: ${title} (jurisdiction unverified)`,
         draftBody:
           typeof payload.draftBody === 'string' && payload.draftBody.trim()
             ? payload.draftBody.trim()
