@@ -14,7 +14,7 @@ export type ReportStatus =
   | 'Dispatched'
   | 'Resolved';
 
-export type AuthChannel = 'Mobile SMS' | 'WhatsApp';
+export type AuthChannel = 'Google Sign-In' | 'Mobile SMS' | 'WhatsApp';
 
 export type AuthorityBranch = 'POLITICAL' | 'ADMINISTRATIVE';
 
@@ -82,6 +82,7 @@ export interface VerifiedAuthority {
 
 export interface CivicReport {
   id: string;
+  userUid?: string | null;
   title: string;
   category: IssueCategory;
   severity: SeverityLevel;
@@ -127,6 +128,10 @@ export interface LocalDraftReport {
 
 export interface CitizenSession {
   authenticated: boolean;
+  uid?: string;
+  email?: string;
+  role?: 'citizen' | 'responder' | 'coordinator';
+  idToken?: string;
   name: string;
   contact: string;
   channel: AuthChannel;
@@ -158,4 +163,93 @@ export interface EmergencyHelpline {
   scope: string;
   isVerifiedOfficial: boolean;
   sourceCitation: string;
+}
+
+// === CityFix Emergency Mesh Network (CEMN) Domain Types ===
+
+export type MeshOperatingMode = 'CONNECTED' | 'DEGRADED' | 'DISCONNECTED';
+
+export type MeshRadioType =
+  | 'BLE'
+  | 'WIFI_DIRECT'
+  | 'WIFI_MESH_NODE'
+  | 'LORA_GATEWAY'
+  | 'SATELLITE_BACKHAUL';
+
+export type MeshDeliveryStatus =
+  | 'QUEUED'
+  | 'RELAYED'
+  | 'RECEIVED'
+  | 'ACKNOWLEDGED';
+
+export type CemnIdentityTier =
+  | 'UNVERIFIED_CITIZEN'
+  | 'VERIFIED_CITIZEN'
+  | 'COMMUNITY_VOLUNTEER'
+  | 'VERIFIED_RESPONDER'
+  | 'OFFICIAL_AGENCY';
+
+export type RescueOperationStage =
+  | 'CITIZEN_REPORTED'
+  | 'VOLUNTEER_RESPONSE'
+  | 'RESPONDER_ACKNOWLEDGED'
+  | 'OFFICIAL_AGENCY_ASSIGNED'
+  | 'RESCUE_IN_PROGRESS'
+  | 'RESOLVED_WITH_EVIDENCE';
+
+export type CemnEventType = 'SOS' | 'MISSING_PERSON' | 'RESOURCE' | 'EVACUATION_ORDER';
+
+export interface CemnNode {
+  nodeId: string;
+  label: string;
+  radioType: MeshRadioType;
+  wardId: string;
+  lat: number;
+  lng: number;
+  batteryPct: number;
+  rssiDbm: number;
+  hopDistance: number;
+  verifiedResponderNode: boolean;
+  status: 'ACTIVE' | 'INTERMITTENT' | 'OFFLINE';
+  lastSeenIso: string;
+}
+
+export interface CemnPacket {
+  messageId: string;
+  eventType: CemnEventType;
+  title: string;
+  summary: string;
+  wardId: string;
+  latitude: number;
+  longitude: number;
+  coordSource: 'GPS' | 'CELL_WIFI' | 'MANUAL_PIN';
+  coordAccuracyM: number;
+  severity: SeverityLevel;
+  identityTier: CemnIdentityTier;
+  authorUid?: string | null;
+  authorLabel: string;
+  publicKeyFingerprint: string;
+  signature: string;
+  deliveryStatus: MeshDeliveryStatus;
+  rescueStage: RescueOperationStage;
+  hopCount: number;
+  relayPath: string[];
+  transportMode: string;
+  payload: Record<string, unknown>;
+  ttlExpiresAt: string;
+  createdAt: string;
+  syncedToCloud: boolean;
+  syncedAt?: string | null;
+}
+
+export interface CemnAuditEntry {
+  id: number;
+  eventMessageId: string;
+  actorUid: string;
+  actorTier: string;
+  action: string;
+  previousStage?: string | null;
+  nextStage?: string | null;
+  note: string;
+  createdAt: string;
 }

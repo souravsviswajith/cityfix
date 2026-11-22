@@ -12,6 +12,7 @@ import {
   VERIFIED_EMERGENCY_HELPLINES,
 } from '../data/disasterGuidance';
 import type { DisasterScale } from '../types/civic';
+import { EmergencyMeshPanel } from './EmergencyMeshPanel';
 
 export const DisasterManagementView: React.FC = () => {
   const [scaleFilter, setScaleFilter] = useState<'ALL' | DisasterScale>('ALL');
@@ -36,12 +37,12 @@ export const DisasterManagementView: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <ShieldAlert className="h-5 w-5 text-red-700 shrink-0" />
           <h1 className="text-xl font-semibold text-slate-900">
-            Disaster & Emergency Response Guidance
+            Disaster Management & Emergency Mesh Network
           </h1>
         </div>
         <p className="mt-1 text-sm text-slate-600">
-          Verified official emergency helplines and authoritative NDMA / Red Cross safety
-          protocols for local emergencies and large-scale disasters.
+          Offline-first CEMN rescue coordination, verified official emergency helplines, and
+          authoritative NDMA / Red Cross safety protocols.
         </p>
       </div>
 
@@ -50,16 +51,22 @@ export const DisasterManagementView: React.FC = () => {
         <div className="flex items-start gap-3">
           <AlertTriangle className="h-5 w-5 text-red-700 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <p className="font-semibold">Direct Emergency Dispatch Disclaimer</p>
+            <p className="font-semibold">
+              Communication vs. Official Emergency Dispatch Notice
+            </p>
             <p className="text-xs leading-relaxed text-red-900">
-              CityFix provides verified emergency contacts and authoritative safety guidance.
-              CityFix does <strong>not</strong> directly dispatch ambulances, fire engines, or
-              rescue teams. In any life-threatening situation, dial <strong>112</strong> or your
-              local emergency services immediately.
+              CityFix provides local mesh communication infrastructure, verified emergency
+              contacts, and authoritative safety guidance. CityFix does <strong>not</strong>{' '}
+              independently dispatch government ambulances, fire engines, or rescue forces. In
+              any life-threatening emergency, dial <strong>112</strong> immediately when
+              cellular or radio service is reachable.
             </p>
           </div>
         </div>
       </div>
+
+      {/* CityFix Emergency Mesh Network (CEMN) Subsystem */}
+      <EmergencyMeshPanel />
 
       {/* Verified National Helplines */}
       <section className="space-y-3">
@@ -144,7 +151,6 @@ export const DisasterManagementView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Scenario Selector List */}
           <div className="lg:col-span-5 rounded-lg border border-slate-200 bg-white divide-y divide-slate-100 max-h-[480px] overflow-y-auto">
             {visibleCategories.map((cat) => {
               const isSelected = activeGuide.id === cat.id;
@@ -172,7 +178,6 @@ export const DisasterManagementView: React.FC = () => {
             })}
           </div>
 
-          {/* Active Protocol Panel */}
           <div className="lg:col-span-7">
             <article className="rounded-lg border border-slate-200 bg-white p-6 space-y-5">
               <div className="border-b border-slate-100 pb-4">

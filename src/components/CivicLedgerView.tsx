@@ -1,10 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Bookmark,
+  BookmarkCheck,
   CheckCircle2,
   Clock,
   FileWarning,
   Mail,
+  Map as MapIcon,
   MapPin,
   Plus,
   Search,
@@ -17,7 +20,10 @@ import {
   WARD_ZONES,
 } from '../data/civicDirectory';
 import { resolveReportMediaUrl } from '../data/civicMedia';
+import { useAuth } from '../context/AuthContext';
 import type { CivicReport, LocalDraftReport, ReportStatus } from '../types/civic';
+import { CityFixGoogleMap, type MapMarkerPoint } from './CityFixGoogleMap';
+import { StatusAnalytics } from './StatusAnalytics';
 
 interface CivicLedgerViewProps {
   reports: CivicReport[];
@@ -28,6 +34,7 @@ interface CivicLedgerViewProps {
   citizenContact?: string;
   onCreateNew: () => void;
   onOpenDisaster?: () => void;
+  onRequireAuth?: () => void;
   onResumeDraft?: (draft: LocalDraftReport) => void;
   onDeleteDraft?: (localId: string) => void;
   onStatusChange: (reportId: string, status: ReportStatus) => Promise<void>;
@@ -68,21 +75,29 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
   citizenContact,
   onCreateNew,
   onOpenDisaster,
+  onRequireAuth,
   onResumeDraft,
   onDeleteDraft,
   onStatusChange,
 }) => {
+  const { session, bookmarks, saveBookmark, removeBookmark } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [wardFilter, setWardFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | ReportStatus>('all');
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [showMap, setShowMap] = useState(true);
+  const [bookmarkBusy, setBookmarkBusy] = useState(false);
 
   const baseReports = useMemo(() => {
     if (!onlyMine) return reports;
-    if (!citizenContact) return [];
-    return reports.filter((r) => r.citizenContact === citizenContact);
-  }, [reports, onlyMine, citizenContact]);
+    if (!session?.authenticated && !citizenContact) return [];
+    return reports.filter(
+      (r) =>
+        (session?.uid && r.userUid === session.uid) ||
+        (citizenContact && r.citizenContact === citizenContact)
+    );
+  }, [reports, onlyMine, citizenContact, session?.authenticated, session?.uid]);
 
   const filteredReports = useMemo(() => {
     return baseReports.filter((r) => {
@@ -103,6 +118,52 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
       filteredReports.find((r) => r.id === selectedReportId) ?? filteredReports[0]
     );
   }, [filteredReports, selectedReportId]);
+
+  const mapMarkers: MapMarkerPoint[] = useMemo(
+    () =>
+      filteredReports.map((r) => ({
+        id: r.id,
+        lat: r.latitude,
+        lng: r.longitude,
+        title: `${r.id} · ${r.title}`,
+        subtitle: `${r.wardName} · ${r.status} (${r.severity})`,
+        accentColor:
+          r.status === 'Resolved'
+            ? '#047857'
+            : r.severity === 'Critical' || r.severity === 'Urgent'
+            ? '#b91c1c'
+            : '#0f4c81',
+        badgeText: r.severity.slice(0, 1),
+      })),
+    [filteredReports]
+  );
+
+  const activeBookmark = useMemo(() => {
+    if (!activeReport) return null;
+    return bookmarks.find((b) => b.reportId === activeReport.id) ?? null;
+  }, [bookmarks, activeReport]);
+
+  const handleToggleBookmark = async () => {
+    if (!activeReport) return;
+    if (!session?.authenticated) {
+      onRequireAuth?.();
+      return;
+    }
+    setBookmarkBusy(true);
+    try {
+      if (activeBookmark) {
+        await removeBookmark(activeBookmark.id);
+      } else {
+        await saveBookmark(
+          activeReport.id,
+          activeReport.wardId,
+          `${activeReport.title} (${activeReport.status})`
+        );
+      }
+    } finally {
+      setBookmarkBusy(false);
+    }
+  };
 
   const metrics = useMemo(() => {
     const total = baseReports.length;
@@ -248,6 +309,13 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
         </div>
       </div>
 
+      {/* Recharts Status Distribution Analytics */}
+      <StatusAnalytics
+        reports={baseReports}
+        activeStatus={statusFilter}
+        onSelectStatus={setStatusFilter}
+      />
+
       {/* Filter Bar */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between rounded-lg border border-slate-200 bg-white p-3.5">
         <div className="flex flex-wrap items-center gap-1 rounded-md bg-slate-100 p-1">
@@ -293,8 +361,42 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setShowMap((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium whitespace-nowrap ${
+              showMap
+                ? 'border-[#0f4c81] bg-sky-50 text-[#0f4c81]'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <MapIcon className="h-3.5 w-3.5" />
+            {showMap ? 'Hide Map' : 'Show Map'}
+          </button>
         </div>
       </div>
+
+      {showMap && filteredReports.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-3.5 space-y-2">
+          <div className="flex items-center justify-between text-xs text-slate-600">
+            <span className="font-semibold text-slate-800">
+              Municipal Issue Spatial Map ({filteredReports.length} plotted)
+            </span>
+            <span>Select any pin to inspect complaint and assigned officials</span>
+          </div>
+          <CityFixGoogleMap
+            center={{
+              lat: activeReport?.latitude ?? 12.9716,
+              lng: activeReport?.longitude ?? 77.5946,
+            }}
+            zoom={13}
+            heightClass="h-64"
+            markers={mapMarkers}
+            selectedMarkerId={activeReport?.id}
+            onMarkerClick={(id) => setSelectedReportId(id)}
+          />
+        </section>
+      )}
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
@@ -314,8 +416,8 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
       ) : filteredReports.length === 0 ? (
         <div className="rounded-lg border border-slate-200 bg-white p-12 text-center">
           <p className="text-base font-semibold text-slate-900">
-            {onlyMine && !citizenContact
-              ? 'Verify your Mobile or WhatsApp number to view personal submissions'
+            {onlyMine && !session?.authenticated
+              ? 'Sign in with Google to view your personal submissions and Firestore bookmarks'
               : 'No civic reports match the current filters'}
           </p>
           <p className="mt-1 text-sm text-slate-500">
@@ -426,9 +528,33 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
                       })}
                     </span>
                   </div>
-                  <h3 className="mt-1.5 text-base font-semibold text-slate-900">
-                    {activeReport.title}
-                  </h3>
+                  <div className="mt-1.5 flex items-start justify-between gap-2">
+                    <h3 className="text-base font-semibold text-slate-900">
+                      {activeReport.title}
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={handleToggleBookmark}
+                      disabled={bookmarkBusy}
+                      className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium whitespace-nowrap shrink-0 ${
+                        activeBookmark
+                          ? 'border-sky-300 bg-sky-50 text-[#0f4c81]'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {activeBookmark ? (
+                        <>
+                          <BookmarkCheck className="h-3.5 w-3.5" />
+                          Bookmarked
+                        </>
+                      ) : (
+                        <>
+                          <Bookmark className="h-3.5 w-3.5" />
+                          Bookmark
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <p className="mt-1 text-xs text-slate-600">
                     {activeReport.address} · {activeReport.wardName} ({activeReport.district})
                   </p>

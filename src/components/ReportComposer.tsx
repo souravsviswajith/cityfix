@@ -9,6 +9,8 @@ import {
   ExternalLink,
   FileText,
   Mail,
+  Mic,
+  MicOff,
   Phone,
   Send,
   ShieldCheck,
@@ -17,6 +19,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import {
   ISSUE_CATEGORIES,
   evaluateAuthorityVerification,
@@ -165,10 +168,18 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   const [urgencySummary, setUrgencySummary] = useState('');
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const { refreshToken } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [draftSavedNotice, setDraftSavedNotice] = useState(false);
+
+  // Voice dictation (gemini-3.5-transcribe)
+  const [dictating, setDictating] = useState(false);
+  const [dictateBusy, setDictateBusy] = useState(false);
+  const [dictateError, setDictateError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const dictationChunksRef = useRef<BlobPart[]>([]);
 
   const selectedWard = useMemo(
     () => identifyJurisdiction(latitude, longitude, explicitWardId),
@@ -341,7 +352,7 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           district: selectedWard.district,
           officials: verifiedAuthorities.map((v) => v.official),
           citizenName: session?.name ?? 'Verified Citizen',
-          citizenContact: session?.contact ?? 'Mobile / WhatsApp Verified',
+          citizenContact: session?.contact ?? 'Google Sign-In Citizen',
           mediaDescription:
             mediaType === 'image'
               ? 'Geotagged photograph attached by citizen.'
@@ -485,6 +496,74 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const handleToggleDictation = async () => {
+    setDictateError(null);
+    if (dictating && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setDictating(false);
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setDictateError('Microphone recording is not supported in this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      dictationChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) dictationChunksRef.current.push(ev.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(dictationChunksRef.current, { type: mimeType });
+        if (blob.size < 200) return;
+        setDictateBusy(true);
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const res = typeof reader.result === 'string' ? reader.result : '';
+              resolve(res.split(',')[1] ?? '');
+            };
+            reader.onerror = () => reject(new Error('Failed to read recorded audio.'));
+            reader.readAsDataURL(blob);
+          });
+          const res = await fetch('/api/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioBase64: base64, mimeType }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setDictateError(data.error || 'Voice transcription failed.');
+          } else if (data.transcript) {
+            setDescription((prev) =>
+              prev.trim() ? `${prev.trim()} ${data.transcript}` : data.transcript
+            );
+          }
+        } catch {
+          setDictateError('Unable to transcribe audio recording.');
+        } finally {
+          setDictateBusy(false);
+        }
+      };
+
+      recorder.start();
+      setDictating(true);
+    } catch {
+      setDictateError('Microphone permission denied or unavailable.');
+    }
+  };
+
   const handleSubmitReport = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -494,11 +573,23 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
       return;
     }
 
+    const token = await refreshToken();
+    if (!token) {
+      setSubmitError(
+        'Please sign in with Google before submitting an official report to Cloud SQL.'
+      );
+      onRequireAuth();
+      return;
+    }
+
     setSubmitting(true);
     try {
       const response = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           title,
           category,
@@ -513,9 +604,9 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           seedImageKey,
           evidenceHash: evidenceHash || undefined,
           complaintFormat,
-          citizenName: session?.name ?? 'Unverified Citizen',
-          citizenContact: session?.contact ?? 'Guest Session',
-          authChannel: session?.channel ?? 'Mobile SMS',
+          citizenName: session?.name ?? 'Verified Citizen',
+          citizenContact: session?.contact ?? 'Verified Google Account',
+          authChannel: session?.channel ?? 'Google Sign-In',
           draftSubject:
             draftSubject ||
             `[${severity.toUpperCase()}] ${title} (${selectedWard.code})`,
@@ -523,7 +614,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
         }),
       });
       const data = await response.json();
-      if (!response.ok) {
+      if (response.status === 401) {
+        setSubmitError('Authentication expired or required. Please sign in with Google.');
+        onRequireAuth();
+      } else if (!response.ok) {
         setSubmitError(data.error || 'Failed to submit civic report.');
       } else if (data.report) {
         onReportSubmitted(data.report);
@@ -577,15 +671,15 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
       {!session?.authenticated && (
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
           <div className="text-xs text-amber-950">
-            <strong>Citizen Verification Recommended:</strong> Sign in with your mobile phone or
-            WhatsApp number so authorities can follow up directly on your complaint.
+            <strong>Google Sign-In Required for Submission:</strong> Authenticate your citizen
+            account to persist official complaints to Cloud SQL and sync ward bookmarks.
           </div>
           <button
             type="button"
             onClick={onRequireAuth}
             className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-50 whitespace-nowrap shrink-0"
           >
-            Verify Mobile / WhatsApp
+            Sign In with Google
           </button>
         </div>
       )}
@@ -800,12 +894,39 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             </div>
 
             <div>
-              <label
-                htmlFor="issue-desc"
-                className="block text-xs font-medium text-slate-700 mb-1"
-              >
-                Observed Details & Community Impact
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label
+                  htmlFor="issue-desc"
+                  className="block text-xs font-medium text-slate-700"
+                >
+                  Observed Details & Community Impact
+                </label>
+                <button
+                  type="button"
+                  onClick={handleToggleDictation}
+                  disabled={dictateBusy}
+                  className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
+                    dictating
+                      ? 'border-red-300 bg-red-50 text-red-700'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {dictating ? (
+                    <>
+                      <MicOff className="h-3 w-3" />
+                      Stop Dictation
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="h-3 w-3" />
+                      {dictateBusy ? 'Transcribing...' : 'Voice Dictate'}
+                    </>
+                  )}
+                </button>
+              </div>
+              {dictateError && (
+                <p className="mb-1.5 text-[11px] text-red-700">{dictateError}</p>
+              )}
               <textarea
                 id="issue-desc"
                 rows={4}

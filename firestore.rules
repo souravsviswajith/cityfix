@@ -1,0 +1,98 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'souravsviswajith@gmail.com';
+    }
+
+    function isValidUserPrefs(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'preferredWardId', 'meshCallsign', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && (!('preferredWardId' in data) || (data.preferredWardId is string && data.preferredWardId.size() <= 64))
+        && (!('meshCallsign' in data) || (data.meshCallsign is string && data.meshCallsign.size() <= 40))
+        && data.updatedAt == request.time;
+    }
+
+    function isValidBookmark(data) {
+      return data.keys().hasAll(['userId', 'reportId', 'wardId', 'note', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'reportId', 'wardId', 'note', 'createdAt'])
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128
+        && data.userId == request.auth.uid
+        && data.reportId is string && data.reportId.size() >= 1 && data.reportId.size() <= 64
+        && data.wardId is string && data.wardId.size() >= 1 && data.wardId.size() <= 64
+        && data.note is string && data.note.size() <= 500
+        && data.createdAt == request.time;
+    }
+
+    function isValidWardBulletin(data) {
+      return data.keys().hasAll(['wardId', 'title', 'summary', 'severity', 'visibility', 'authorUid', 'createdAt'])
+        && data.keys().hasOnly(['wardId', 'title', 'summary', 'severity', 'visibility', 'authorUid', 'createdAt'])
+        && data.wardId is string && data.wardId.size() >= 1 && data.wardId.size() <= 64
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 180
+        && data.summary is string && data.summary.size() >= 3 && data.summary.size() <= 1000
+        && data.severity in ['Low', 'Moderate', 'Urgent', 'Critical']
+        && data.visibility == 'public'
+        && data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128
+        && data.authorUid == request.auth.uid
+        && data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUserPrefs(incoming());
+      allow update: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId
+        && isValidUserPrefs(incoming())
+        && incoming().uid == existing().uid
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredWardId', 'meshCallsign', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /citizen_bookmarks/{bookmarkId} {
+      allow get: if isSignedIn() && isValidId(bookmarkId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerifiedUser() && isValidId(bookmarkId) && isValidBookmark(incoming());
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(bookmarkId) && existing().userId == request.auth.uid;
+    }
+
+    match /ward_bulletins/{bulletinId} {
+      allow get: if isSignedIn() && isValidId(bulletinId) && existing().visibility == 'public';
+      allow list: if isSignedIn() && resource.data.visibility == 'public';
+      allow create: if isAdmin() && isValidId(bulletinId) && isValidWardBulletin(incoming());
+      allow update: if isAdmin() && isValidId(bulletinId)
+        && isValidWardBulletin(incoming())
+        && incoming().authorUid == existing().authorUid
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(bulletinId);
+    }
+  }
+}

@@ -1,34 +1,48 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
+  Box,
   ClipboardList,
   FilePlus2,
   Menu,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Users,
   X,
 } from 'lucide-react';
 import { CitizenAuthModal } from './components/CitizenAuthModal';
+import { CivicAiStudioView } from './components/CivicAiStudioView';
 import { CivicLedgerView } from './components/CivicLedgerView';
+import { CivicTwin3DView } from './components/CivicTwin3DView';
 import { DisasterManagementView } from './components/DisasterManagementView';
+import { OfflineStatusIndicator } from './components/OfflineStatusIndicator';
 import { OfficialsDirectory } from './components/OfficialsDirectory';
 import { ReportComposer } from './components/ReportComposer';
+import { useAuth } from './context/AuthContext';
 import type {
-  CitizenSession,
   CivicReport,
   LocalDraftReport,
   ReportStatus,
 } from './types/civic';
 
-type ActiveTab = 'ledger' | 'report' | 'disaster' | 'officials' | 'submissions';
+type ActiveTab =
+  | 'ledger'
+  | 'report'
+  | 'disaster'
+  | '3d-twin'
+  | 'ai-hub'
+  | 'officials'
+  | 'submissions';
 
 const LOCAL_DRAFTS_KEY = 'cityfix_local_drafts_v1';
 
 export const App: React.FC = () => {
+  const { session, refreshToken } = useAuth();
   const [activeTab, setActiveTab] = useState<ActiveTab>('ledger');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [session, setSession] = useState<CitizenSession | null>(null);
+  const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState(false);
 
   const [reports, setReports] = useState<CivicReport[]>([]);
   const [reportsLoading, setReportsLoading] = useState(true);
@@ -43,6 +57,14 @@ export const App: React.FC = () => {
       return [];
     }
   });
+
+  useEffect(() => {
+    const onQuotaExceeded = () => setMapsQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    return () => {
+      window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    };
+  }, []);
 
   const persistLocalDrafts = (next: LocalDraftReport[]) => {
     setLocalDrafts(next);
@@ -105,11 +127,24 @@ export const App: React.FC = () => {
   };
 
   const handleStatusChange = async (reportId: string, status: ReportStatus) => {
+    const token = await refreshToken();
+    if (!token) {
+      setAuthModalOpen(true);
+      return;
+    }
+
     const res = await fetch(`/api/reports/${reportId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ status }),
     });
+    if (res.status === 401) {
+      setAuthModalOpen(true);
+      return;
+    }
     const data = await res.json();
     if (res.ok && data.report) {
       setReports((prev) =>
@@ -125,7 +160,9 @@ export const App: React.FC = () => {
   }[] = [
     { id: 'ledger', label: 'Civic Ledger', Icon: ClipboardList },
     { id: 'report', label: 'Report Issue', Icon: FilePlus2 },
-    { id: 'disaster', label: 'Disaster & Emergency', Icon: ShieldAlert },
+    { id: 'disaster', label: 'Disaster & Mesh', Icon: ShieldAlert },
+    { id: '3d-twin', label: '3D Ward Twin', Icon: Box },
+    { id: 'ai-hub', label: 'Civic AI Hub', Icon: Sparkles },
     { id: 'officials', label: 'Officials Directory', Icon: Users },
     { id: 'submissions', label: 'My Submissions', Icon: ShieldCheck },
   ];
@@ -191,7 +228,7 @@ export const App: React.FC = () => {
             >
               <p className="text-xs font-semibold text-slate-900 truncate">{session.name}</p>
               <p className="mt-0.5 font-mono text-[11px] text-slate-500 truncate">
-                {session.contact} · {session.channel}
+                {session.email || session.contact} · {session.role ?? 'citizen'}
               </p>
             </button>
           ) : (
@@ -200,7 +237,7 @@ export const App: React.FC = () => {
               onClick={() => setAuthModalOpen(true)}
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap"
             >
-              Citizen Sign In (SMS / WhatsApp)
+              Sign In with Google
             </button>
           )}
         </div>
@@ -257,6 +294,28 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
+        {mapsQuotaExceeded && (
+          <div className="sticky top-0 z-50 border-b border-amber-300 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 flex items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+              <span>
+                <strong>Temporary Demo Key Quota Exceeded:</strong> Some Google Maps features may be
+                temporarily unavailable. To restore full functionality, upgrade to your own Google
+                Maps Platform API key in the{' '}
+                <a
+                  href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold underline text-amber-900 hover:text-amber-800"
+                >
+                  Google Cloud Console
+                </a>
+                .
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Top Bar Contract */}
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-8 border-b border-slate-200 bg-white px-4 sm:px-8">
           <div className="flex items-center gap-3 min-w-0">
@@ -278,12 +337,13 @@ export const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            <OfflineStatusIndicator onClick={() => setActiveTab('disaster')} />
             <button
               type="button"
               onClick={() => setAuthModalOpen(true)}
               className="hidden sm:inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
             >
-              {session?.authenticated ? session.name : 'Verify Citizen Phone'}
+              {session?.authenticated ? session.name : 'Sign In with Google'}
             </button>
             <button
               type="button"
@@ -310,6 +370,7 @@ export const App: React.FC = () => {
                 setActiveTab('report');
               }}
               onOpenDisaster={() => setActiveTab('disaster')}
+              onRequireAuth={() => setAuthModalOpen(true)}
               onResumeDraft={handleResumeDraft}
               onDeleteDraft={handleDeleteLocalDraft}
               onStatusChange={handleStatusChange}
@@ -329,6 +390,10 @@ export const App: React.FC = () => {
 
           {activeTab === 'disaster' && <DisasterManagementView />}
 
+          {activeTab === '3d-twin' && <CivicTwin3DView />}
+
+          {activeTab === 'ai-hub' && <CivicAiStudioView />}
+
           {activeTab === 'officials' && <OfficialsDirectory />}
 
           {activeTab === 'submissions' && (
@@ -343,6 +408,7 @@ export const App: React.FC = () => {
                 setResumedDraft(null);
                 setActiveTab('report');
               }}
+              onRequireAuth={() => setAuthModalOpen(true)}
               onResumeDraft={handleResumeDraft}
               onDeleteDraft={handleDeleteLocalDraft}
               onStatusChange={handleStatusChange}
@@ -359,9 +425,6 @@ export const App: React.FC = () => {
       <CitizenAuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
-        onAuthenticated={(s) => setSession(s)}
-        currentSession={session}
-        onSignOut={() => setSession(null)}
       />
     </div>
   );

@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "UserPreferences": {
+      "title": "UserPreferences",
+      "description": "Non-PII citizen workspace preferences and mesh callsign synchronized across sessions.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "preferredWardId": { "type": "string", "maxLength": 64 },
+        "meshCallsign": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "updatedAt"]
+    },
+    "CitizenBookmark": {
+      "title": "CitizenBookmark",
+      "description": "Citizen bookmark tracking a civic report or emergency zone.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reportId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "wardId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "note": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "reportId", "wardId", "note", "createdAt"]
+    },
+    "WardBulletin": {
+      "title": "WardBulletin",
+      "description": "Official municipal or emergency alert bulletin verified by coordinator.",
+      "type": "object",
+      "properties": {
+        "wardId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 180 },
+        "summary": { "type": "string", "minLength": 3, "maxLength": 1000 },
+        "severity": { "type": "string", "enum": ["Low", "Moderate", "Urgent", "Critical"] },
+        "visibility": { "type": "string", "enum": ["public"] },
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["wardId", "title", "summary", "severity", "visibility", "authorUid", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPreferences" },
+      "description": "Owner-only citizen preferences without PII."
+    },
+    "/citizen_bookmarks/{bookmarkId}": {
+      "schema": { "$ref": "#/entities/CitizenBookmark" },
+      "description": "User-scoped report and ward bookmarks."
+    },
+    "/ward_bulletins/{bulletinId}": {
+      "schema": { "$ref": "#/entities/WardBulletin" },
+      "description": "Coordinator-published ward advisories."
+    }
+  }
+}
