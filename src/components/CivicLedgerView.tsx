@@ -10,10 +10,13 @@ import {
   Map as MapIcon,
   MapPin,
   Plus,
+  Printer,
   Search,
   Trash2,
   Wrench,
+  X,
 } from 'lucide-react';
+import { generateCivicReportPdf } from '../lib/reportPdf';
 import {
   ISSUE_CATEGORIES,
   PUBLIC_OFFICIALS,
@@ -88,6 +91,7 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(true);
   const [bookmarkBusy, setBookmarkBusy] = useState(false);
+  const [printingId, setPrintingId] = useState<string | null>(null);
 
   const baseReports = useMemo(() => {
     if (!onlyMine) return reports;
@@ -104,13 +108,39 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
       if (wardFilter !== 'all' && r.wardId !== wardFilter) return false;
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const hay = `${r.id} ${r.title} ${r.address} ${r.wardName} ${r.description}`.toLowerCase();
+        const q = searchQuery.trim().toLowerCase();
+        const hay =
+          `${r.id} ${r.title} ${r.address} ${r.wardName} ${r.district} ${r.category} ${r.severity} ${r.citizenName} ${r.description}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
   }, [baseReports, wardFilter, statusFilter, searchQuery]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<'all' | ReportStatus, number> = {
+      all: baseReports.length,
+      Submitted: 0,
+      Acknowledged: 0,
+      Dispatched: 0,
+      Resolved: 0,
+    };
+    for (const r of baseReports) {
+      if (r.status in counts) {
+        counts[r.status] += 1;
+      }
+    }
+    return counts;
+  }, [baseReports]);
+
+  const hasActiveFilters =
+    searchQuery.trim().length > 0 || statusFilter !== 'all' || wardFilter !== 'all';
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setWardFilter('all');
+  };
 
   const activeReport = useMemo(() => {
     if (!filteredReports.length) return null;
@@ -165,6 +195,15 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
     }
   };
 
+  const handlePrintReport = async (report: CivicReport) => {
+    setPrintingId(report.id);
+    try {
+      await generateCivicReportPdf(report);
+    } finally {
+      setPrintingId(null);
+    }
+  };
+
   const metrics = useMemo(() => {
     const total = baseReports.length;
     const active = baseReports.filter((r) => r.status !== 'Resolved').length;
@@ -205,6 +244,117 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
           Report Civic Issue
         </button>
       </div>
+
+      {/* Top Text Search & Status Filter Bar */}
+      <section
+        aria-label="Search and filter civic reports"
+        className="rounded-lg border border-slate-200 bg-white p-3.5 space-y-3"
+      >
+        <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              aria-label="Search reports by keyword"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by report ID, title, street, ward, category, or keyword..."
+              className="w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0f4c81] focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search text"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <select
+              aria-label="Filter reports by status"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as 'all' | ReportStatus)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-[#0f4c81] focus:outline-none"
+            >
+              <option value="all">All Statuses ({statusCounts.all})</option>
+              <option value="Submitted">Submitted ({statusCounts.Submitted})</option>
+              <option value="Acknowledged">Acknowledged ({statusCounts.Acknowledged})</option>
+              <option value="Dispatched">Dispatched ({statusCounts.Dispatched})</option>
+              <option value="Resolved">Resolved ({statusCounts.Resolved})</option>
+            </select>
+
+            <select
+              aria-label="Filter reports by ward"
+              value={wardFilter}
+              onChange={(e) => setWardFilter(e.target.value)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-[#0f4c81] focus:outline-none"
+            >
+              <option value="all">All Wards</option>
+              {WARD_ZONES.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.code} · {w.name}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={() => setShowMap((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium whitespace-nowrap ${
+                showMap
+                  ? 'border-[#0f4c81] bg-sky-50 text-[#0f4c81]'
+                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <MapIcon className="h-3.5 w-3.5" />
+              {showMap ? 'Hide Map' : 'Show Map'}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1 rounded-md bg-slate-100 p-1">
+            {(['all', 'Submitted', 'Acknowledged', 'Dispatched', 'Resolved'] as const).map(
+              (st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setStatusFilter(st)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                    statusFilter === st
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {st === 'all' ? 'All Statuses' : st}{' '}
+                  <span className="font-mono text-[11px] text-slate-500">
+                    ({statusCounts[st]})
+                  </span>
+                </button>
+              )
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 text-xs text-slate-600">
+            <span className="font-mono tabular-nums">
+              Showing {filteredReports.length} of {baseReports.length} report(s)
+            </span>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="font-medium text-[#0f4c81] hover:underline whitespace-nowrap"
+              >
+                Reset filters
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* Prominent Emergency & Disaster Pathway on Overview */}
       {!onlyMine && onOpenDisaster && (
@@ -316,66 +466,6 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
         onSelectStatus={setStatusFilter}
       />
 
-      {/* Filter Bar */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between rounded-lg border border-slate-200 bg-white p-3.5">
-        <div className="flex flex-wrap items-center gap-1 rounded-md bg-slate-100 p-1">
-          {(['all', 'Submitted', 'Acknowledged', 'Dispatched', 'Resolved'] as const).map(
-            (st) => (
-              <button
-                key={st}
-                type="button"
-                onClick={() => setStatusFilter(st)}
-                className={`rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                  statusFilter === st
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {st === 'all' ? 'All Statuses' : st}
-              </button>
-            )
-          )}
-        </div>
-
-        <div className="flex flex-1 flex-col sm:flex-row gap-2.5 lg:max-w-lg">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search report ID, street, or issue..."
-              className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0f4c81] focus:outline-none"
-            />
-          </div>
-          <select
-            aria-label="Filter reports by ward"
-            value={wardFilter}
-            onChange={(e) => setWardFilter(e.target.value)}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 focus:border-[#0f4c81] focus:outline-none"
-          >
-            <option value="all">All Wards</option>
-            {WARD_ZONES.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.code} · {w.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => setShowMap((v) => !v)}
-            className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium whitespace-nowrap ${
-              showMap
-                ? 'border-[#0f4c81] bg-sky-50 text-[#0f4c81]'
-                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            <MapIcon className="h-3.5 w-3.5" />
-            {showMap ? 'Hide Map' : 'Show Map'}
-          </button>
-        </div>
-      </div>
-
       {showMap && filteredReports.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-3.5 space-y-2">
           <div className="flex items-center justify-between text-xs text-slate-600">
@@ -423,14 +513,25 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
           <p className="mt-1 text-sm text-slate-500">
             Document an infrastructure issue with geotagged evidence to create a formal complaint.
           </p>
-          <button
-            type="button"
-            onClick={onCreateNew}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-[#0f4c81] px-4 py-2 text-sm font-medium text-white hover:bg-[#0c3d68]"
-          >
-            <Plus className="h-4 w-4" />
-            Log First Report
-          </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Clear Active Filters
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onCreateNew}
+              className="inline-flex items-center gap-1.5 rounded-md bg-[#0f4c81] px-4 py-2 text-sm font-medium text-white hover:bg-[#0c3d68]"
+            >
+              <Plus className="h-4 w-4" />
+              Log New Report
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
@@ -532,28 +633,39 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
                     <h3 className="text-base font-semibold text-slate-900">
                       {activeReport.title}
                     </h3>
-                    <button
-                      type="button"
-                      onClick={handleToggleBookmark}
-                      disabled={bookmarkBusy}
-                      className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium whitespace-nowrap shrink-0 ${
-                        activeBookmark
-                          ? 'border-sky-300 bg-sky-50 text-[#0f4c81]'
-                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      {activeBookmark ? (
-                        <>
-                          <BookmarkCheck className="h-3.5 w-3.5" />
-                          Bookmarked
-                        </>
-                      ) : (
-                        <>
-                          <Bookmark className="h-3.5 w-3.5" />
-                          Bookmark
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handlePrintReport(activeReport)}
+                        disabled={printingId === activeReport.id}
+                        className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 whitespace-nowrap"
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                        {printingId === activeReport.id ? 'Generating...' : 'Print Report'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleToggleBookmark}
+                        disabled={bookmarkBusy}
+                        className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium whitespace-nowrap ${
+                          activeBookmark
+                            ? 'border-sky-300 bg-sky-50 text-[#0f4c81]'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {activeBookmark ? (
+                          <>
+                            <BookmarkCheck className="h-3.5 w-3.5" />
+                            Bookmarked
+                          </>
+                        ) : (
+                          <>
+                            <Bookmark className="h-3.5 w-3.5" />
+                            Bookmark
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <p className="mt-1 text-xs text-slate-600">
                     {activeReport.address} · {activeReport.wardName} ({activeReport.district})
