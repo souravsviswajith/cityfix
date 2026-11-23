@@ -17,7 +17,7 @@
 
 ## 0. First understand what you are setting up
 
-CityFix is an Android-first civic reporting and disaster-awareness project.
+CityFix is an Android-only civic reporting and disaster-awareness project.
 
 A citizen should be able to record a civic issue, attach location and evidence with permission, prepare a complaint, and understand which authority may be responsible. The disaster-management module is intended to support local incident coordination when connectivity is poor.
 
