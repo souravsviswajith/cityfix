@@ -470,25 +470,226 @@ A successful TypeScript check, APK assembly, or UI demonstration does not prove 
 
 ## Build and development
 
-### Android prerequisites
+This section takes a contributor from a fresh Git clone to a locally built APK and a downloadable GitHub Actions artifact. It is a quick walkthrough; the [complete Windows setup guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md) contains screenshots/navigation details, SDK configuration, troubleshooting, device setup, and the full maintainer release checklist.
 
-- Android Studio with Android SDK Platform 35.
-- JDK 17.
-- Gradle 8.9 (until a committed Gradle wrapper is available).
-- Android device or emulator for UI and local persistence testing.
+### 1. Clone the repository
 
-### Build
+Install Git, JDK 17, Android Studio, and the Android SDK first. The complete guide lists the exact versions and installation steps.
+
+Open PowerShell and choose a workspace directory:
+
+```powershell
+New-Item -ItemType Directory -Force D:\Workspace | Out-Null
+Set-Location D:\Workspace
+git clone https://github.com/souravsviswajith/cityfix.git
+Set-Location .\cityfix
+```
+
+If the repository is private, sign in to GitHub when Git requests authentication. Do not put a password or token in the clone URL.
+
+Confirm the checkout:
+
+```powershell
+git status
+git branch --show-current
+```
+
+The default branch is `main`. Start a task branch before making changes:
+
+```powershell
+git switch -c feature/short-task-name
+```
+
+### 2. Confirm the required toolchain
+
+The current Android project configuration is:
+
+| Component | Required version |
+|---|---|
+| JDK | 17 |
+| Android SDK Platform | 35 |
+| Android Build Tools | 35.0.0 |
+| Android Gradle Plugin | 8.7.3 |
+| Kotlin | 2.0.21 |
+| Gradle | 8.9 |
+| Minimum Android version | API 26 (Android 8.0) |
+
+Verify Java and Gradle in PowerShell:
+
+```powershell
+java -version
+javac -version
+gradle --version
+```
+
+Java and the JVM reported by Gradle must be version 17. This repository currently has **no committed Gradle Wrapper** (`gradlew` / `gradlew.bat`), so install Gradle 8.9 and use the `gradle` command. Do not use `gradlew` until wrapper files are committed.
+
+### 3. Install and configure Android SDK packages
+
+In Android Studio:
+
+1. Open **More Actions → SDK Manager** (or **Tools → SDK Manager** in an open project).
+2. Under **SDK Platforms**, install **Android 15.0 / API 35**.
+3. Under **SDK Tools**, install **Android SDK Build-Tools 35.0.0**, **Android SDK Platform-Tools**, and **Android SDK Command-line Tools (latest)**.
+4. Apply the changes and accept the licences.
+5. Note the Android SDK Location shown at the top of SDK Manager.
+
+Set `ANDROID_HOME` to that exact location. Example only (use your actual SDK path):
+
+```powershell
+[Environment]::SetEnvironmentVariable("ANDROID_HOME", "$env:LOCALAPPDATA\Android\Sdk", "User")
+```
+
+Add these entries to the user PATH if they are not already present:
+
+```text
+%ANDROID_HOME%\platform-tools
+%ANDROID_HOME%\cmdline-tools\latest\bin
+```
+
+Close and reopen PowerShell, then verify:
+
+```powershell
+adb version
+sdkmanager --version
+sdkmanager --list
+```
+
+If SDK Manager installed the packages but command-line tools cannot find them, re-check `ANDROID_HOME` and the actual SDK location before changing project files.
+
+### 4. Open and sync the Android project
+
+1. Start Android Studio.
+2. Select **Open**.
+3. Choose the repository's `android` directory (not the repository root).
+4. Allow Gradle sync to complete.
+5. Open **File → Settings → Build, Execution, Deployment → Build Tools → Gradle**.
+6. Set **Gradle JDK** to JDK 17.
+7. Confirm the project sync completes without changing the Android Gradle Plugin, Kotlin, SDK, or Gradle versions.
+
+The native application source is under `android/`. The older browser prototype is not the supported Android client.
+
+### 5. Run CityFix on an emulator or Android phone
+
+**Emulator**
+
+1. In Android Studio, open **Tools → Device Manager**.
+2. Create a virtual device using a compatible Android image (API 26 or later; API 35 is suitable for current-target testing).
+3. Start the emulator.
+4. Select it in the run-device selector and click **Run**.
+
+**Physical Android phone**
+
+1. Enable Developer options on the phone.
+2. Enable **USB debugging**.
+3. Connect the phone with a data-capable USB cable.
+4. Unlock the phone and accept the RSA debugging prompt.
+5. In PowerShell, run:
+
+```powershell
+adb devices
+```
+
+The device should appear with status `device`, not `unauthorized`. Then run the app from Android Studio.
+
+Grant permissions only when prompted and only for the feature being tested. A locally saved SOS is not proof that another phone, responder, or authority received it. BLE capability inspection is not a working multi-hop mesh.
+
+### 6. Build a debug APK locally
 
 From the repository root:
 
-```bash
-cd android
+```powershell
+Set-Location .\android
+gradle :app:clean
 gradle :app:assembleDebug
+Set-Location ..
 ```
 
-Open the `android/` directory in Android Studio to sync and run the app. The project currently has no committed Gradle wrapper; adding and validating a wrapper is a reproducibility task.
+Wait for `BUILD SUCCESSFUL`. The APK should exist at:
 
-### Backend and provider configuration
+```text
+android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+Verify the APK and calculate its SHA-256 checksum:
+
+```powershell
+Test-Path .\android\app\build\outputs\apk\debug\app-debug.apk
+Get-FileHash .\android\app\build\outputs\apk\debug\app-debug.apk -Algorithm SHA256
+```
+
+Install it on a connected, authorized device:
+
+```powershell
+adb install -r .\android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+This is a **debug build for development/testing**, not a production-signed application.
+
+### 7. Push your branch and open a pull request
+
+Before pushing, inspect and validate your changes:
+
+```powershell
+git diff --check
+git status
+git diff
+```
+
+Stage only the files you intended to change:
+
+```powershell
+git add path\to\changed-file
+git commit -m "feat(android): describe the change"
+git push -u origin HEAD
+```
+
+Open a pull request from your branch into `main`. Do not push directly to `main`. The Android Actions workflow runs for pull requests that change `android/**` or the Android workflow file.
+
+### 8. Download the GitHub Actions APK artifact
+
+The repository workflow is **Android build** (`.github/workflows/android.yml`). It assembles a debug APK, creates a SHA-256 checksum, and uploads both as the artifact `cityfix-debug-apk` with a 14-day retention period.
+
+To run it manually:
+
+1. Open [CityFix Actions](https://github.com/souravsviswajith/cityfix/actions).
+2. Select **Android build**.
+3. Click **Run workflow**.
+4. Select the branch to build and confirm **Run workflow**.
+5. Open the new run and wait for the build job to finish successfully.
+6. In the run summary, find **Artifacts**.
+7. Download `cityfix-debug-apk` and extract the ZIP.
+8. Confirm the archive contains `app-debug.apk` and `app-debug.apk.sha256`.
+
+Verify the downloaded checksum in PowerShell from the extracted folder:
+
+```powershell
+Get-FileHash .\app-debug.apk -Algorithm SHA256
+Get-Content .\app-debug.apk.sha256
+```
+
+The hash values must match. The artifact is a temporary CI output tied to a workflow run and commit; it is not a GitHub Release or production distribution.
+
+### 9. Publish a maintainer-approved GitHub test release
+
+A maintainer may attach a validated debug APK to a clearly labelled **pre-release** for internal testing:
+
+1. Confirm the source commit has passed the required review and CI build.
+2. Download the APK and checksum from that exact successful workflow run.
+3. Open [CityFix Releases](https://github.com/souravsviswajith/cityfix/releases).
+4. Select **Draft a new release**.
+5. Create or select an approved tag (for example, `v0.1.0-test.1` only if that version is approved).
+6. Use a title that identifies it as an internal/test build.
+7. Mark **Set as a pre-release**.
+8. Attach `app-debug.apk` and `app-debug.apk.sha256`.
+9. Include the source commit, workflow run, build type, known limitations, and test instructions in the release notes.
+10. Review the files and notes, then publish.
+
+**Do not call this a production release.** The current repository workflow builds a debug APK only. Production signing, a signed release variant, automated GitHub Release publishing, and Play Store distribution are not configured or verified. Never commit a keystore or signing credentials.
+
+For the full novice-first walkthrough and troubleshooting, continue with [Android Setup, Build & Artifact Release Guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md).
+
+## Backend and provider configuration
 
 Provider-backed capabilities must remain disabled or return explicit unavailable states until the required configuration, authentication, authorization, and source validation are in place.
 
