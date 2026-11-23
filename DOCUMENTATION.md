@@ -8,6 +8,10 @@ This index is the entry point for contributors, developers, testers, reviewers, 
 
 | Audience | Read |
 |---|---|
+| First-time Android contributor | [Android SDK, Build & Artifact Release Guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md) |
+
+| Audience | Read |
+|---|---|
 | First-time reader / evaluator | [Project README](README.md) |
 | New teammate | [Team Setup Guide](docs/TEAM_SETUP_GUIDE.md) |
 | Developer / architect | [System Architecture](docs/ARCHITECTURE.md), then [Architecture Overview](docs/architecture/overview.md) |
