@@ -2,7 +2,7 @@
 
 ## 1. Purpose and scope
 
-CityFix is an Android-first civic reporting and disaster-awareness platform. Its primary civic workflow helps a citizen document an issue, attach its geographic context, discover the public authorities relevant to that location and issue, verify the returned identity and jurisdiction records, and prepare an evidence-backed report.
+CityFix is an Android-only civic reporting and disaster-awareness platform. Its primary civic workflow helps a citizen document an issue, attach its geographic context, discover the public authorities relevant to that location and issue, verify the returned identity and jurisdiction records, and prepare an evidence-backed report.
 
 The Disaster Management module is a distinct operational capability. It uses location services and the CityFix Emergency Mesh Network (CEMN) to support incident awareness and structured coordination when internet connectivity is degraded or unavailable.
 
@@ -10,7 +10,7 @@ The Disaster Management module is a distinct operational capability. It uses loc
 
 ## 2. Architectural principles
 
-- **Android-first:** the native client is the target product; browser-based UI is a prototype/reference unless explicitly promoted to a supported client.
+- **Android-only:** the native client is the target product; browser-based UI is a prototype/reference unless explicitly promoted to a supported client.
 - **Offline-first capture:** issue and incident capture must remain usable when backend connectivity is unavailable; synchronization is deferred.
 - **Evidence before escalation:** media, location, timestamp, and citizen-provided details form the report evidence package.
 - **Live authority discovery:** public authority data is retrieved from attributable sources, not assumed to be a permanently correct static directory.
