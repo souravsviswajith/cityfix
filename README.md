@@ -414,7 +414,7 @@ AI may assist with issue classification, description structuring, complaint draf
 | Deferred work | WorkManager for eligible deferred synchronization |
 | Nearby transport | BLE, Wi-Fi Direct, Wi-Fi Aware with capability detection |
 | Mesh protocol | Application-level typed messages, queues, routing, TTL, deduplication, acknowledgements, security |
-| Backend | Kotlin/Ktor or the repository's existing server stack, organized as a modular monolith |
+| Backend | Existing Express/TypeScript server, organized as a modular monolith |
 | AI | Gemini through server-side integration only |
 | Geographic data | Authoritative GIS/jurisdiction boundaries with versioning |
 | Authority data | Live official sources/connectors with provenance and freshness |
@@ -533,6 +533,46 @@ A JVM unit test cannot prove Bluetooth/Wi-Fi radio behavior, Android lifecycle b
 - Confirm that only authorized responders can acknowledge privileged workflows or close incidents.
 - Confirm that a relay, receipt, acknowledgement, and resolution are separate states.
 - Confirm that emergency dial actions launch the appropriate system dial intent when implemented.
+
+
+## Build artifacts and release options
+
+CityFix can distribute build outputs through GitHub without treating every CI build as a public release. These are **distribution options**, not a claim that a signed production release pipeline is currently configured.
+
+### Option 1 — CI workflow artifact
+
+Use GitHub Actions to upload the Android debug APK (and, where useful, test reports) as a workflow artifact after a successful build.
+
+- Intended for developer review, QA, and short-lived testing.
+- Tied to a specific workflow run and commit.
+- Retention follows the repository's GitHub Actions artifact-retention settings.
+- Not a versioned public release and not suitable as a production distribution channel.
+- A debug APK must be labelled as a development/test build.
+
+### Option 2 — GitHub Release asset
+
+For a deliberate versioned distribution, create a Git tag and GitHub Release and attach a validated Android APK. A release workflow may build the APK from the tagged commit and upload it to the Release.
+
+Before publishing a production-facing APK:
+1. Use a release build variant.
+2. Sign with a protected Android upload/release keystore; keep passwords and signing material in protected GitHub Actions secrets or a controlled signing environment.
+3. Never commit keystores, passwords, service credentials, or API keys.
+4. Run the required CI checks and device acceptance tests for the capabilities being advertised.
+5. Generate and publish a SHA-256 checksum; retain the source commit/tag and build provenance.
+6. Document version, supported Android range, known limitations, permissions, and whether the artifact is debug, internal-test, or production-signed.
+7. Do not claim Play Store availability or official emergency capability unless separately released and verified.
+
+### Option 3 — Other distribution channels
+
+Google Play internal/closed testing or another controlled Android distribution channel may be considered later. This requires the appropriate application signing, store configuration, privacy disclosures, review, and release ownership. It is not required for local development.
+
+### Current release status
+
+- Android application version is currently `0.1.0` with `versionCode 1`.
+- The repository's Android workflows currently assemble a debug APK; this is not a signed production release.
+- No verified production signing configuration or public CityFix Android release is documented.
+- The repository contains generic Gradle template workflows that refer to a Gradle Wrapper and a `publish` task not present in the Android project. Do not treat those templates as a working CityFix release pipeline.
+- No GitHub Release publication should be considered configured until a dedicated workflow is implemented, exercised against a test tag, and its uploaded asset verified.
 
 ## Documentation
 
