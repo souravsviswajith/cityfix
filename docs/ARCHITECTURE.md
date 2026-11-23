@@ -72,9 +72,9 @@ CEMN must not become a general-purpose chat or social messaging product. Relay o
 | Core platform | Location, media, local database, network state, security, mesh transport |
 | Data | Local persistence, synchronization, report storage, audit/event records |
 | Integrations | GIS/jurisdiction provider, official authority sources, AI drafting provider, external sharing channels |
-| Backend | Authenticated APIs, provider orchestration, server-side secrets, authorization, rate limits, audit and synchronization |
+| Backend | Existing Express/TypeScript API; intended modular-monolith organization for authenticated APIs, provider orchestration, server-side secrets, authorization, rate limits, audit and synchronization |
 
-The Android application currently has a single app module with internal package boundaries. This table describes the target logical architecture; it is not a claim that every layer is already a separate Gradle module or that every provider is configured.
+The Android application currently has a single app module with internal package boundaries. The current server implementation is Express/TypeScript; modular monolith describes its intended internal organization, not a separate service fleet. This table describes the target logical architecture; it is not a claim that every layer is already a separate Gradle module or that every provider is configured.
 
 ## 5. Primary civic-report workflow
 
@@ -139,7 +139,7 @@ Update this table whenever implementation changes. A build passing is not eviden
 
 ## 9. Suggested Android package boundaries
 
-The following is a target decomposition, not a statement that these are all existing Gradle modules:
+The following is a target decomposition, not a statement that these are all existing Gradle modules. The backend currently remains the Express/TypeScript server; the module names below are logical boundaries, not separately deployed services:
 
 ```text
 :app
