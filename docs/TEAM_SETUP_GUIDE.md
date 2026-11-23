@@ -1237,3 +1237,29 @@ Then open a Pull Request on GitHub.
 ---
 
 **Document maintenance:** This guide reflects the repository configuration inspected on 22 November 2026. If Gradle, Android SDK, Node.js, repository scripts, or environment variables change, the maintainer must update this guide. Do not silently follow outdated instructions after the project configuration changes.
+
+
+---
+
+# Part G — Build artifacts and release distribution
+
+## 25. Understand the two GitHub download options
+
+CityFix may use two different GitHub distribution paths. They are not interchangeable.
+
+### CI workflow artifact (development / QA)
+
+A CI artifact is attached to a GitHub Actions workflow run. If the workflow uploads an APK, open the repository's **Actions** tab, select the successful Android build run, and download the artifact from its Artifacts section. This is suitable for testing a particular commit. It may expire according to repository retention settings and is not a public versioned release.
+
+The current Android workflows assemble a debug APK. A debug APK is for development and testing only. Do not distribute it as a production build.
+
+### GitHub Release asset (versioned distribution)
+
+A GitHub Release is a versioned distribution record associated with a Git tag. When CityFix has a validated release workflow, download the APK from the repository's **Releases** page. Check the release notes, version, source tag, signing status, supported Android versions, and SHA-256 checksum before installing it.
+
+A production-facing release must use a release build variant and protected signing credentials. Never ask a teammate to send you a keystore or signing password over chat. Signing material must remain in an approved protected environment.
+
+### Current status
+
+The repository documents CI-artifact and GitHub-Release distribution as options. A verified production signing configuration and a dedicated GitHub Release upload workflow are not yet established. Do not expect a production APK in Releases. Follow the README's [Build artifacts and release options](../README.md#build-artifacts-and-release-options) section for the current release status.
+
