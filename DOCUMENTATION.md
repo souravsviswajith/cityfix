@@ -8,7 +8,8 @@ This is the documentation index for contributors, reviewers, testers, and projec
 
 | Audience | Read |
 |---|---|
-| New teammate | [Team Setup & Contributor Guide](docs/TEAM_SETUP_GUIDE.md) |
+| New Android contributor | [Complete Android Setup, Build & Artifact Guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md) |
+| New teammate / contributor | [Team Setup & Contributor Guide](docs/TEAM_SETUP_GUIDE.md) |
 | Developer / architect | [Architecture Overview](docs/architecture/overview.md) |
 | Contributor | [Contribution Workflow](docs/CONTRIBUTING.md) |
 | QA / evaluator | [Feature & Workflow Reference](docs/architecture/workflows.md) |
@@ -18,17 +19,18 @@ This is the documentation index for contributors, reviewers, testers, and projec
 
 ```text
 CityFix/
-├── README.md                         # Product overview and repository landing page
-├── DOCUMENTATION.md                  # This documentation index
+├── README.md
+├── DOCUMENTATION.md
 └── docs/
-    ├── TEAM_SETUP_GUIDE.md            # Windows-first onboarding and setup
-    ├── CONTRIBUTING.md                # Branch, commit, PR, and review workflow
+    ├── ANDROID_SETUP_AND_RELEASE_GUIDE.md # Android SDK → local build → CI artifact → release
+    ├── TEAM_SETUP_GUIDE.md                # Windows-first contributor onboarding
+    ├── CONTRIBUTING.md
     ├── architecture/
-    │   ├── overview.md                # System context and component boundaries
-    │   ├── workflows.md               # Report, SOS, and CEMN workflows
+    │   ├── overview.md
+    │   ├── workflows.md
     │   └── disaster-management-gps-cemn.md
     └── security/
-        └── implementation-baseline.md # Current controls and remaining gaps
+        └── implementation-baseline.md
 ```
 
 ## Documentation conventions
@@ -39,6 +41,8 @@ CityFix/
 - **Unavailable** means a required data source, provider, or integration is not configured or cannot be verified.
 - Diagrams labelled **target** describe intended behavior, not current runtime behavior.
 - Examples and screenshots must use synthetic data unless explicit consent and authorization exist.
+- Debug APK artifacts are for development/testing. They are not production releases.
+- Production signing and automated production release must be documented only after they are implemented and verified.
 
 ## Maintenance
 
