@@ -34,8 +34,12 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
-const HOST = '0.0.0.0';
+const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
+const HOST = process.env.HOST?.trim() || '0.0.0.0';
+
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
+  throw new Error(`Invalid PORT value: ${process.env.PORT}`);
+}
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
