@@ -2,7 +2,7 @@
 
 **See the problem. Report it. Reach the responsible authority.**
 
-CityFix is an Android-only civic reporting and disaster-management platform designed to connect citizen-reported problems with the public authorities responsible for them. It combines evidence capture, geolocation, live authority discovery, identity and jurisdiction verification, citizen-reviewed complaint preparation, and a separate disaster-management system with an Android-phone-based emergency coordination network.
+CityFix is an open-source civic reporting and disaster-management project with a React/Vite web client, a native Kotlin/Jetpack Compose Android client, and an Express/TypeScript backend. It is designed to connect citizen-reported problems with the public authorities responsible for them. It combines evidence capture, geolocation, live authority discovery, identity and jurisdiction verification, citizen-reviewed complaint preparation, and a separate disaster-management system with an Android-phone-based emergency coordination network.
 
 CityFix is not intended to be another form that merely collects a complaint and stops there. Its design connects the full civic reporting path—from observing a problem to identifying the appropriate public office—with a distinct offline-capable incident coordination path for emergencies.
 
@@ -60,7 +60,7 @@ These are CityFix's intended product and engineering distinctions. They are not 
 
 ## Product scope
 
-**Client scope:** native Android application only. There is no iOS application or CityFix web application in the current product scope. A public landing page is a separate project/buildathon deliverable, not a second application client.
+**Client scope:** Web (React/Vite) and native Android (Kotlin/Jetpack Compose). The web frontend is built into static files under `dist/`; API-backed features still require the Express backend and its configured integrations. Android is a separate native application. There is no iOS client in the current scope.
 
 ### Civic reporting modules
 
@@ -440,7 +440,7 @@ Relevant areas in this repository:
 └── README.md
 ```
 
-The repository also contains an earlier browser-based interface prototype/reference. It is not the supported product client and prototype screens must not be treated as evidence of live backend, authority, alert, or mesh behavior.
+The React/Vite web client and native Android client are distinct delivery targets. The web static build does not include the Express API, WebSocket service, database, Firebase authentication, or server-side AI integrations. Prototype or simulated screens must not be treated as evidence of live backend, authority, alert, or mesh behavior.
 
 ## Implementation status
 
@@ -470,9 +470,9 @@ A successful TypeScript check, APK assembly, or UI demonstration does not prove 
 
 ## Build and development
 
-This section takes a contributor from a fresh Git clone to a locally built APK and a downloadable GitHub Actions artifact. It is a quick walkthrough; the [complete Windows setup guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md) contains screenshots/navigation details, SDK configuration, troubleshooting, device setup, and the full maintainer release checklist.
+This section covers local web and Android builds plus downloadable CI artifacts. See the [Web setup and release guide](docs/WEB_SETUP_AND_RELEASE_GUIDE.md) for the React/Vite client and the [Android setup guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md) for native setup, SDK configuration, device testing, and APK builds.
 
-### 1. Clone the repository
+### 1. Web client build\n\nRequirements: Node.js 22 and pnpm 9.15.9.\n\n```bash\npnpm install --frozen-lockfile\npnpm run check\n```\n\nThe production frontend is generated in `dist/`. Deploying that directory alone does not deploy the Express API; configure a same-origin reverse proxy/API rewrite or serve the frontend and backend together. See [Web setup and release](docs/WEB_SETUP_AND_RELEASE_GUIDE.md).\n\n### 2. Clone the repository
 
 Install Git, JDK 17, Android Studio, and the Android SDK first. The complete guide lists the exact versions and installation steps.
 
@@ -500,7 +500,7 @@ The default branch is `main`. Start a task branch before making changes:
 git switch -c feature/short-task-name
 ```
 
-### 2. Confirm the required toolchain
+### 3. Confirm the required Android toolchain
 
 The current Android project configuration is:
 
@@ -524,7 +524,7 @@ gradle --version
 
 Java and the JVM reported by Gradle must be version 17. This repository currently has **no committed Gradle Wrapper** (`gradlew` / `gradlew.bat`), so install Gradle 8.9 and use the `gradle` command. Do not use `gradlew` until wrapper files are committed.
 
-### 3. Install and configure Android SDK packages
+### 4. Install and configure Android SDK packages
 
 In Android Studio:
 
@@ -557,7 +557,7 @@ sdkmanager --list
 
 If SDK Manager installed the packages but command-line tools cannot find them, re-check `ANDROID_HOME` and the actual SDK location before changing project files.
 
-### 4. Open and sync the Android project
+### 5. Open and sync the Android project
 
 1. Start Android Studio.
 2. Select **Open**.
@@ -569,7 +569,7 @@ If SDK Manager installed the packages but command-line tools cannot find them, r
 
 The native application source is under `android/`. The older browser prototype is not the supported Android client.
 
-### 5. Run CityFix on an emulator or Android phone
+### 6. Run CityFix on an emulator or Android phone
 
 **Emulator**
 
