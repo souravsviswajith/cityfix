@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { WorkspaceAuthExpiredError, createGoogleDoc } from '../lib/workspaceClient';
 import {
   ISSUE_CATEGORIES,
   evaluateAuthorityVerification,
@@ -27,6 +28,7 @@ import {
   identifyJurisdiction,
 } from '../data/civicDirectory';
 import { SEED_IMAGE_ASSETS } from '../data/civicMedia';
+import { sanitizeExternalHref } from '../lib/securityValidation';
 import type {
   CitizenSession,
   CivicReport,
@@ -168,11 +170,22 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
   const [urgencySummary, setUrgencySummary] = useState('');
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
-  const { refreshToken } = useAuth();
+  const {
+    refreshToken,
+    workspaceAccessToken,
+    connectWorkspace,
+    clearWorkspaceToken,
+  } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [draftSavedNotice, setDraftSavedNotice] = useState(false);
+  const [docSaving, setDocSaving] = useState(false);
+  const [docSavedLink, setDocSavedLink] = useState<{
+    title: string;
+    webViewLink: string;
+  } | null>(null);
+  const [docSaveError, setDocSaveError] = useState<string | null>(null);
 
   // Voice dictation (gemini-3.5-transcribe)
   const [dictating, setDictating] = useState(false);
@@ -335,9 +348,14 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
 
     setDraftLoading(true);
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.authenticated) {
+        const tok = await refreshToken().catch(() => null);
+        if (tok) headers.Authorization = `Bearer ${tok}`;
+      }
       const response = await fetch('/api/draft', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           title,
           category,
@@ -496,6 +514,51 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const handleSaveDraftToGoogleDoc = async () => {
+    setDocSaveError(null);
+    setDocSavedLink(null);
+    const docTitle =
+      draftSubject.trim() ||
+      title.trim() ||
+      `CityFix Complaint Brief (${selectedWard.code})`;
+    const docBody = [
+      `Subject: ${docTitle}`,
+      `Ward: ${selectedWard.code} (${selectedWard.name})`,
+      `Coordinates: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+      evidenceHash ? `Evidence SHA-256: ${evidenceHash}` : null,
+      '',
+      draftBody.trim() || description.trim() || '(Empty draft)',
+    ]
+      .filter((line): line is string => line !== null)
+      .join('\n');
+
+    setDocSaving(true);
+    try {
+      let token = workspaceAccessToken;
+      if (!token) {
+        token = await connectWorkspace();
+      }
+      if (!token) {
+        setDocSaveError('Google Drive & Docs authorization was not granted.');
+        return;
+      }
+      const created = await createGoogleDoc(token, docTitle, docBody);
+      setDocSavedLink({
+        title: created.title,
+        webViewLink: created.webViewLink,
+      });
+    } catch (err) {
+      if (err instanceof WorkspaceAuthExpiredError) {
+        clearWorkspaceToken();
+      }
+      setDocSaveError(
+        err instanceof Error ? err.message : 'Unable to save draft to Google Docs.'
+      );
+    } finally {
+      setDocSaving(false);
+    }
+  };
+
   const handleToggleDictation = async () => {
     setDictateError(null);
     if (dictating && mediaRecorderRef.current) {
@@ -511,10 +574,14 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      const preferredMime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+      const recorder = preferredMime
+        ? new MediaRecorder(stream, { mimeType: preferredMime })
+        : new MediaRecorder(stream);
       dictationChunksRef.current = [];
       mediaRecorderRef.current = recorder;
 
@@ -524,7 +591,8 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(dictationChunksRef.current, { type: mimeType });
+        const resolvedMime = recorder.mimeType || preferredMime || 'audio/webm';
+        const blob = new Blob(dictationChunksRef.current, { type: resolvedMime });
         if (blob.size < 200) return;
         setDictateBusy(true);
         try {
@@ -537,10 +605,15 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
             reader.onerror = () => reject(new Error('Failed to read recorded audio.'));
             reader.readAsDataURL(blob);
           });
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (session?.authenticated) {
+            const tok = await refreshToken().catch(() => null);
+            if (tok) headers.Authorization = `Bearer ${tok}`;
+          }
           const res = await fetch('/api/transcribe', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audioBase64: base64, mimeType }),
+            headers,
+            body: JSON.stringify({ audioBase64: base64, mimeType: resolvedMime }),
           });
           const data = await res.json();
           if (!res.ok) {
@@ -600,7 +673,10 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
           longitude,
           wardId: selectedWard.id,
           mediaType,
-          mediaUrl: seedImageKey ? undefined : mediaPreviewUrl || undefined,
+          mediaUrl:
+            seedImageKey || mediaPreviewUrl.startsWith('blob:')
+              ? undefined
+              : mediaPreviewUrl || undefined,
           seedImageKey,
           evidenceHash: evidenceHash || undefined,
           complaintFormat,
@@ -1020,9 +1096,9 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
                             {official.phone}
                           </a>
                         )}
-                        {official.sourceUrl && (
+                        {sanitizeExternalHref(official.sourceUrl) && (
                           <a
-                            href={official.sourceUrl}
+                            href={sanitizeExternalHref(official.sourceUrl)}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500 hover:text-[#0f4c81] hover:underline"
@@ -1197,6 +1273,15 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
                   <Download className="h-3.5 w-3.5" />
                   .txt
                 </button>
+                <button
+                  type="button"
+                  onClick={handleSaveDraftToGoogleDoc}
+                  disabled={docSaving || (!draftBody && !draftSubject && !description && !title)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  {docSaving ? 'Saving Doc...' : 'Save Doc'}
+                </button>
                 <a
                   href={mailtoHref}
                   className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap"
@@ -1216,6 +1301,23 @@ export const ReportComposer: React.FC<ReportComposerProps> = ({
               </button>
             </div>
 
+            {docSaveError && <p className="text-xs text-red-700">{docSaveError}</p>}
+            {docSavedLink && (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                <span className="truncate">Saved "{docSavedLink.title}" to Google Docs</span>
+                {sanitizeExternalHref(docSavedLink.webViewLink) && (
+                  <a
+                    href={sanitizeExternalHref(docSavedLink.webViewLink)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-semibold text-emerald-800 hover:underline whitespace-nowrap shrink-0"
+                  >
+                    Open Doc
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            )}
             {submitError && <p className="text-xs text-red-700">{submitError}</p>}
           </section>
         </div>

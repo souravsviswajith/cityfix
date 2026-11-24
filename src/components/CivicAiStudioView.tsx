@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Check,
+  Copy,
   ExternalLink,
+  FileAudio,
   Film,
   Globe,
   MapPin,
@@ -11,9 +14,17 @@ import {
   PhoneOff,
   Send,
   Sparkles,
+  Square,
+  Trash2,
   Upload,
+  Volume2,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import { SEED_IMAGE_ASSETS } from '../data/civicMedia';
+import {
+  sanitizeExternalHref,
+  sanitizeSafeVideoDataUrl,
+} from '../lib/securityValidation';
 
 interface ChatMessage {
   id: string;
@@ -23,6 +34,16 @@ interface ChatMessage {
   webSources?: Array<{ title: string; uri: string }>;
   mapsSources?: Array<{ title: string; uri: string; snippets: string[] }>;
 }
+
+interface LiveTranscriptTurn {
+  id: string;
+  who: 'Citizen' | 'Assistant';
+  text: string;
+  final?: boolean;
+}
+
+const LIVE_VOICES = ['Zephyr', 'Kore', 'Puck', 'Charon', 'Fenrir'] as const;
+type LiveVoice = (typeof LIVE_VOICES)[number];
 
 function pcmFloat32ToBase64(float32: Float32Array): string {
   const int16 = new Int16Array(float32.length);
@@ -48,18 +69,26 @@ function base64PcmToAudioBuffer(
   for (let i = 0; i < len; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const int16 = new Int16Array(bytes.buffer);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) {
+  const sampleCount = Math.floor(bytes.byteLength / 2);
+  const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, sampleCount);
+  const float32 = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
     float32[i] = int16[i] / 32768;
   }
-  const audioBuffer = ctx.createBuffer(1, float32.length, 24000);
+  const audioBuffer = ctx.createBuffer(1, Math.max(1, float32.length), 24000);
   audioBuffer.copyToChannel(float32, 0);
   return audioBuffer;
 }
 
+function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
 export const CivicAiStudioView: React.FC = () => {
-  const [activeMode, setActiveMode] = useState<'chat' | 'voice' | 'video'>('chat');
+  const { session, refreshToken } = useAuth();
+  const [activeMode, setActiveMode] = useState<'chat' | 'transcribe' | 'voice' | 'video'>('chat');
 
   // === Multi-turn Chat + Search/Maps Grounding ===
   const [chatModel, setChatModel] = useState('gemini-4-hydrogen');
@@ -75,27 +104,52 @@ export const CivicAiStudioView: React.FC = () => {
     },
   ]);
 
-  // === Audio Transcription (gemini-3.5-transcribe) ===
+  // === Inline Chat Mic Transcription (gemini-3.5-transcribe) ===
   const [recordingTranscribe, setRecordingTranscribe] = useState(false);
   const [transcribeStatus, setTranscribeStatus] = useState<string | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<BlobPart[]>([]);
+  const chatMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chatAudioChunksRef = useRef<BlobPart[]>([]);
+
+  // === Dedicated Audio Transcription Studio (gemini-3.5-transcribe) ===
+  const [studioRecording, setStudioRecording] = useState(false);
+  const [studioElapsedSec, setStudioElapsedSec] = useState(0);
+  const [studioBusy, setStudioBusy] = useState(false);
+  const [studioAudioUrl, setStudioAudioUrl] = useState<string | null>(null);
+  const [studioAudioLabel, setStudioAudioLabel] = useState<string>('');
+  const [studioTranscript, setStudioTranscript] = useState('');
+  const [studioError, setStudioError] = useState<string | null>(null);
+  const [studioCopied, setStudioCopied] = useState(false);
+  const studioRecorderRef = useRef<MediaRecorder | null>(null);
+  const studioChunksRef = useRef<BlobPart[]>([]);
+  const studioStreamRef = useRef<MediaStream | null>(null);
+  const studioTimerRef = useRef<number | null>(null);
+  const studioUploadRef = useRef<HTMLInputElement | null>(null);
 
   // === Real-Time Voice Conversation (gemini-3.8-live) ===
+  const [selectedVoice, setSelectedVoice] = useState<LiveVoice>('Zephyr');
+  const [liveConnecting, setLiveConnecting] = useState(false);
   const [liveConnected, setLiveConnected] = useState(false);
+  const [liveMuted, setLiveMuted] = useState(false);
   const [liveStatus, setLiveStatus] = useState('Disconnected');
-  const [liveTranscripts, setLiveTranscripts] = useState<
-    Array<{ who: 'Citizen' | 'Assistant'; text: string }>
-  >([]);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveTextInput, setLiveTextInput] = useState('');
+  const [liveTranscripts, setLiveTranscripts] = useState<LiveTranscriptTurn[]>([]);
+
   const wsRef = useRef<WebSocket | null>(null);
   const inputCtxRef = useRef<AudioContext | null>(null);
   const outputCtxRef = useRef<AudioContext | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const nextStartTimeRef = useRef(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const liveReadyRef = useRef(false);
+  const liveMutedRef = useRef(false);
 
   // === Animate Image into Video (gemini-omni-1.2-flash) ===
-  const [selectedPresetKey, setSelectedPresetKey] = useState<'pothole' | 'streetlight' | 'waste' | 'custom'>('pothole');
+  const [selectedPresetKey, setSelectedPresetKey] = useState<
+    'pothole' | 'streetlight' | 'waste' | 'custom'
+  >('pothole');
   const [customImageBase64, setCustomImageBase64] = useState('');
   const [customImageMime, setCustomImageMime] = useState('image/jpeg');
   const [customPreviewUrl, setCustomPreviewUrl] = useState('');
@@ -108,10 +162,56 @@ export const CivicAiStudioView: React.FC = () => {
   const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    liveMutedRef.current = liveMuted;
+  }, [liveMuted]);
+
+  useEffect(() => {
     return () => {
       stopLiveSession();
+      if (studioTimerRef.current !== null) {
+        window.clearInterval(studioTimerRef.current);
+      }
+      if (studioRecorderRef.current?.state === 'recording') {
+        studioRecorderRef.current.stop();
+      }
+      studioStreamRef.current?.getTracks().forEach((t) => t.stop());
+      if (chatMediaRecorderRef.current?.state === 'recording') {
+        chatMediaRecorderRef.current.stop();
+      }
     };
   }, []);
+
+  const transcribeAudioBlob = async (blob: Blob): Promise<string> => {
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        resolve(dataUrl.split(',')[1] ?? '');
+      };
+      reader.onerror = () => reject(new Error('Failed to read recorded audio.'));
+      reader.readAsDataURL(blob);
+    });
+
+    const cleanMime = (blob.type || 'audio/webm').split(';')[0].trim() || 'audio/webm';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (session?.authenticated) {
+      const tok = await refreshToken().catch(() => null);
+      if (tok) headers.Authorization = `Bearer ${tok}`;
+    }
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        audioBase64: base64,
+        mimeType: cleanMime,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Audio transcription failed.');
+    }
+    return typeof data.transcript === 'string' ? data.transcript.trim() : '';
+  };
 
   const handleSendChat = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,9 +244,14 @@ export const CivicAiStudioView: React.FC = () => {
     }
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.authenticated) {
+        const tok = await refreshToken().catch(() => null);
+        if (tok) headers.Authorization = `Bearer ${tok}`;
+      }
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           model: chatModel,
           groundingMode,
@@ -193,69 +298,197 @@ export const CivicAiStudioView: React.FC = () => {
 
   const toggleTranscribeMic = async () => {
     if (recordingTranscribe) {
-      mediaRecorderRef.current?.stop();
+      chatMediaRecorderRef.current?.stop();
       setRecordingTranscribe(false);
       return;
     }
 
     setTranscribeStatus(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setTranscribeStatus('Microphone access not supported in this browser.');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setTranscribeStatus('Microphone recording is not supported in this browser.');
       return;
     }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      audioChunksRef.current = [];
+      const preferredMime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+      const recorder = preferredMime
+        ? new MediaRecorder(stream, { mimeType: preferredMime })
+        : new MediaRecorder(stream);
+      chatAudioChunksRef.current = [];
 
       recorder.ondataavailable = (ev) => {
-        if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+        if (ev.data.size > 0) chatAudioChunksRef.current.push(ev.data);
       };
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(audioChunksRef.current, {
+        const blob = new Blob(chatAudioChunksRef.current, {
           type: recorder.mimeType || 'audio/webm',
         });
+        if (blob.size < 100) {
+          setTranscribeStatus('Recording too short. Speak clearly and try again.');
+          return;
+        }
         setTranscribeStatus('Transcribing with gemini-3.5-transcribe...');
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-          const base64 = dataUrl.split(',')[1] ?? '';
-          try {
-            const res = await fetch('/api/transcribe', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                audioBase64: base64,
-                mimeType: blob.type || 'audio/webm',
-              }),
-            });
-            const data = await res.json();
-            if (res.ok && data.transcript) {
-              setChatInput((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript));
-              setTranscribeStatus('Audio transcribed into prompt box.');
-            } else {
-              setTranscribeStatus(data.error || 'Transcription failed.');
-            }
-          } catch {
-            setTranscribeStatus('Network error during audio transcription.');
+        try {
+          const transcript = await transcribeAudioBlob(blob);
+          if (transcript) {
+            setChatInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+            setTranscribeStatus('Audio transcribed into prompt box.');
+          } else {
+            setTranscribeStatus('No speech detected in the recording.');
           }
-        };
-        reader.readAsDataURL(blob);
+        } catch (err) {
+          setTranscribeStatus(
+            err instanceof Error ? err.message : 'Unable to transcribe audio recording.'
+          );
+        }
       };
 
-      mediaRecorderRef.current = recorder;
+      chatMediaRecorderRef.current = recorder;
       recorder.start();
       setRecordingTranscribe(true);
       setTranscribeStatus('Recording... click Mic again to transcribe.');
     } catch {
-      setTranscribeStatus('Microphone permission denied.');
+      setTranscribeStatus('Microphone permission denied or unavailable.');
     }
   };
 
+  // === Dedicated Audio Transcription Studio Handlers ===
+  const handleToggleStudioRecording = async () => {
+    setStudioError(null);
+    if (studioRecording) {
+      if (studioTimerRef.current !== null) {
+        window.clearInterval(studioTimerRef.current);
+        studioTimerRef.current = null;
+      }
+      studioRecorderRef.current?.stop();
+      setStudioRecording(false);
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setStudioError('Microphone recording is not supported in this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      studioStreamRef.current = stream;
+      const preferredMime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+      const recorder = preferredMime
+        ? new MediaRecorder(stream, { mimeType: preferredMime })
+        : new MediaRecorder(stream);
+
+      studioChunksRef.current = [];
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) studioChunksRef.current.push(ev.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        studioStreamRef.current = null;
+        const blob = new Blob(studioChunksRef.current, {
+          type: recorder.mimeType || 'audio/webm',
+        });
+        if (studioAudioUrl) {
+          URL.revokeObjectURL(studioAudioUrl);
+        }
+        const previewUrl = URL.createObjectURL(blob);
+        setStudioAudioUrl(previewUrl);
+        setStudioAudioLabel(`Microphone Recording (${(blob.size / 1024).toFixed(1)} KB)`);
+
+        if (blob.size < 100) {
+          setStudioError('Recording was empty or too short to transcribe.');
+          return;
+        }
+
+        setStudioBusy(true);
+        try {
+          const text = await transcribeAudioBlob(blob);
+          if (text) {
+            setStudioTranscript((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text));
+          } else {
+            setStudioError('No intelligible speech detected in the recorded audio.');
+          }
+        } catch (err) {
+          setStudioError(
+            err instanceof Error ? err.message : 'Audio transcription request failed.'
+          );
+        } finally {
+          setStudioBusy(false);
+        }
+      };
+
+      studioRecorderRef.current = recorder;
+      setStudioElapsedSec(0);
+      recorder.start();
+      setStudioRecording(true);
+      studioTimerRef.current = window.setInterval(() => {
+        setStudioElapsedSec((prev) => prev + 1);
+      }, 1000);
+    } catch {
+      setStudioError('Microphone permission denied or no microphone device available.');
+    }
+  };
+
+  const handleStudioAudioFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setStudioError(null);
+    if (studioAudioUrl) {
+      URL.revokeObjectURL(studioAudioUrl);
+    }
+    setStudioAudioUrl(URL.createObjectURL(file));
+    setStudioAudioLabel(`${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
+    setStudioBusy(true);
+    try {
+      const text = await transcribeAudioBlob(file);
+      if (text) {
+        setStudioTranscript((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text));
+      } else {
+        setStudioError('No speech detected in the uploaded audio file.');
+      }
+    } catch (err) {
+      setStudioError(
+        err instanceof Error ? err.message : 'Unable to transcribe uploaded audio file.'
+      );
+    } finally {
+      setStudioBusy(false);
+    }
+  };
+
+  const handleCopyStudioTranscript = async () => {
+    if (!studioTranscript.trim()) return;
+    try {
+      await navigator.clipboard.writeText(studioTranscript);
+      setStudioCopied(true);
+      window.setTimeout(() => setStudioCopied(false), 2000);
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
+
+  const handleSendTranscriptToChat = () => {
+    if (!studioTranscript.trim()) return;
+    setChatInput(studioTranscript.trim());
+    setActiveMode('chat');
+  };
+
+  // === Real-Time Live Voice Session (gemini-3.8-live) ===
   const stopLiveSession = () => {
+    liveReadyRef.current = false;
     activeSourcesRef.current.forEach((src) => {
       try {
         src.stop();
@@ -264,8 +497,24 @@ export const CivicAiStudioView: React.FC = () => {
       }
     });
     activeSourcesRef.current = [];
-    wsRef.current?.close();
-    wsRef.current = null;
+    try {
+      processorRef.current?.disconnect();
+    } catch {
+      // Ignore
+    }
+    processorRef.current = null;
+    try {
+      micSourceRef.current?.disconnect();
+    } catch {
+      // Ignore
+    }
+    micSourceRef.current = null;
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     inputCtxRef.current?.close().catch(() => {});
@@ -273,45 +522,100 @@ export const CivicAiStudioView: React.FC = () => {
     outputCtxRef.current?.close().catch(() => {});
     outputCtxRef.current = null;
     nextStartTimeRef.current = 0;
+    setLiveConnecting(false);
     setLiveConnected(false);
+    setLiveMuted(false);
     setLiveStatus('Disconnected');
   };
 
-  const startLiveSession = async () => {
-    setLiveStatus('Connecting to Gemini 3.8 Live...');
-    try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
-      wsRef.current = ws;
+  const appendLiveTranscript = (who: 'Citizen' | 'Assistant', chunkText: string) => {
+    const clean = chunkText;
+    if (!clean) return;
+    setLiveTranscripts((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.who === who && !last.final) {
+        const needsSpace =
+          last.text.length > 0 &&
+          !last.text.endsWith(' ') &&
+          !clean.startsWith(' ') &&
+          !/^[.,!?;:']/.test(clean);
+        const updated: LiveTranscriptTurn = {
+          ...last,
+          text: `${last.text}${needsSpace ? ' ' : ''}${clean}`,
+        };
+        return [...prev.slice(0, -1), updated];
+      }
+      return [
+        ...prev.slice(-24),
+        {
+          id: `${who}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          who,
+          text: clean.trimStart(),
+          final: false,
+        },
+      ];
+    });
+  };
 
+  const startLiveSession = async () => {
+    if (liveConnected || liveConnecting) return;
+    setLiveError(null);
+    setLiveConnecting(true);
+    setLiveStatus(`Connecting to gemini-3.8-live (${selectedVoice})...`);
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setLiveError('Microphone capture is not supported in this browser.');
+      setLiveConnecting(false);
+      setLiveStatus('Disconnected');
+      return;
+    }
+
+    try {
       const inputCtx = new AudioContext({ sampleRate: 16000 });
       const outputCtx = new AudioContext({ sampleRate: 24000 });
       inputCtxRef.current = inputCtx;
       outputCtxRef.current = outputCtx;
 
+      await Promise.all([inputCtx.resume(), outputCtx.resume()]);
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(
+        `${protocol}//${window.location.host}/ws/live?voice=${encodeURIComponent(selectedVoice)}`
+      );
+      wsRef.current = ws;
+
+      ws.onerror = () => {
+        setLiveError('WebSocket connection error while reaching Gemini Live service.');
+        stopLiveSession();
+      };
 
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.ready) {
+          liveReadyRef.current = true;
+          setLiveConnecting(false);
           setLiveConnected(true);
-          setLiveStatus('Live Voice Active (16kHz in / 24kHz out)');
+          setLiveStatus(`Live Voice Active (${selectedVoice} · 16kHz in / 24kHz out)`);
         }
         if (msg.error) {
-          setLiveStatus(`Live Error: ${msg.error}`);
+          setLiveError(String(msg.error));
+          setLiveStatus('Live Error');
         }
         if (msg.inputTranscript) {
-          setLiveTranscripts((prev) => [
-            ...prev.slice(-18),
-            { who: 'Citizen', text: msg.inputTranscript },
-          ]);
+          appendLiveTranscript('Citizen', String(msg.inputTranscript));
         }
         if (msg.outputTranscript) {
-          setLiveTranscripts((prev) => [
-            ...prev.slice(-18),
-            { who: 'Assistant', text: msg.outputTranscript },
-          ]);
+          appendLiveTranscript('Assistant', String(msg.outputTranscript));
+        }
+        if (msg.turnComplete) {
+          setLiveTranscripts((prev) =>
+            prev.map((item, idx) =>
+              idx === prev.length - 1 ? { ...item, final: true } : item
+            )
+          );
         }
         if (msg.interrupted) {
           activeSourcesRef.current.forEach((s) => {
@@ -322,45 +626,71 @@ export const CivicAiStudioView: React.FC = () => {
             }
           });
           activeSourcesRef.current = [];
-          nextStartTimeRef.current = outputCtx.currentTime;
+          if (outputCtxRef.current) {
+            nextStartTimeRef.current = outputCtxRef.current.currentTime;
+          }
         }
         if (msg.audio && outputCtxRef.current) {
-          const buffer = base64PcmToAudioBuffer(outputCtxRef.current, msg.audio);
-          const source = outputCtxRef.current.createBufferSource();
+          const ctx = outputCtxRef.current;
+          const buffer = base64PcmToAudioBuffer(ctx, msg.audio);
+          const source = ctx.createBufferSource();
           source.buffer = buffer;
-          source.connect(outputCtxRef.current.destination);
-          const startAt = Math.max(
-            outputCtxRef.current.currentTime,
-            nextStartTimeRef.current
-          );
+          source.connect(ctx.destination);
+          const startAt = Math.max(ctx.currentTime, nextStartTimeRef.current);
           source.start(startAt);
           nextStartTimeRef.current = startAt + buffer.duration;
           activeSourcesRef.current.push(source);
+          source.onended = () => {
+            activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
+          };
+        }
+        if (msg.closed) {
+          stopLiveSession();
         }
       };
 
       ws.onclose = () => {
-        setLiveConnected(false);
-        setLiveStatus('Session Ended');
+        stopLiveSession();
       };
 
       const micSource = inputCtx.createMediaStreamSource(stream);
       const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+      micSourceRef.current = micSource;
+      processorRef.current = processor;
+
       micSource.connect(processor);
       processor.connect(inputCtx.destination);
 
       processor.onaudioprocess = (ev) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          const base64 = pcmFloat32ToBase64(ev.inputBuffer.getChannelData(0));
-          ws.send(JSON.stringify({ audio: base64 }));
+        if (
+          !liveReadyRef.current ||
+          liveMutedRef.current ||
+          !wsRef.current ||
+          wsRef.current.readyState !== WebSocket.OPEN
+        ) {
+          return;
         }
+        const base64 = pcmFloat32ToBase64(ev.inputBuffer.getChannelData(0));
+        wsRef.current.send(JSON.stringify({ audio: base64 }));
       };
     } catch (err) {
-      setLiveStatus(
-        err instanceof Error ? err.message : 'Unable to start microphone Live stream.'
+      setLiveError(
+        err instanceof Error ? err.message : 'Unable to start microphone Live voice session.'
       );
       stopLiveSession();
     }
+  };
+
+  const handleSendLiveText = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = liveTextInput.trim();
+    if (!trimmed || !liveConnected || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ text: trimmed }));
+    setLiveTranscripts((prev) => [
+      ...prev.slice(-24),
+      { id: `Citizen-text-${Date.now()}`, who: 'Citizen', text: trimmed, final: true },
+    ]);
+    setLiveTextInput('');
   };
 
   const handleVideoImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -399,9 +729,14 @@ export const CivicAiStudioView: React.FC = () => {
         });
       }
 
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.authenticated) {
+        const tok = await refreshToken().catch(() => null);
+        if (tok) headers.Authorization = `Bearer ${tok}`;
+      }
       const res = await fetch('/api/animate-video', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           imageBase64: base64,
           mimeType: mime,
@@ -413,7 +748,14 @@ export const CivicAiStudioView: React.FC = () => {
       if (!res.ok) {
         setVideoError(data.error || 'Video animation failed.');
       } else if (data.videoBase64) {
-        setGeneratedVideoUrl(`data:${data.mimeType || 'video/mp4'};base64,${data.videoBase64}`);
+        const safeVideo = sanitizeSafeVideoDataUrl(
+          `data:${data.mimeType || 'video/mp4'};base64,${data.videoBase64}`
+        );
+        if (safeVideo) {
+          setGeneratedVideoUrl(safeVideo);
+        } else {
+          setVideoError('Received unsupported video payload format from server.');
+        }
       }
     } catch {
       setVideoError('Network error during evidence video generation.');
@@ -427,19 +769,21 @@ export const CivicAiStudioView: React.FC = () => {
       <div className="border-b border-slate-200 pb-4 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">
-            CityFix AI Assistant, Voice Dispatch & Evidence Video Studio
+            CityFix AI Assistant, Voice Dispatch & Audio Studio
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Multi-turn grounded civic Q&A, real-time Gemini Live voice dispatch, audio
-            transcription, and evidence-to-video briefing clips.
+            Multi-turn grounded civic Q&A, microphone audio transcription (
+            <code className="font-mono text-xs">gemini-3.5-transcribe</code>), real-time Live
+            voice conversations (<code className="font-mono text-xs">gemini-3.8-live</code>), and
+            evidence video briefs.
           </p>
         </div>
 
-        <div className="inline-flex rounded-md bg-slate-100 p-1">
+        <div className="flex flex-wrap rounded-md bg-slate-100 p-1 gap-1">
           <button
             type="button"
             onClick={() => setActiveMode('chat')}
-            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
               activeMode === 'chat'
                 ? 'bg-white text-slate-900 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -450,8 +794,20 @@ export const CivicAiStudioView: React.FC = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveMode('transcribe')}
+            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+              activeMode === 'transcribe'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <FileAudio className="h-3.5 w-3.5" />
+            Audio Transcribe
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveMode('voice')}
-            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
               activeMode === 'voice'
                 ? 'bg-white text-slate-900 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -463,7 +819,7 @@ export const CivicAiStudioView: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveMode('video')}
-            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
               activeMode === 'video'
                 ? 'bg-white text-slate-900 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -551,18 +907,22 @@ export const CivicAiStudioView: React.FC = () => {
                       <p className="text-[11px] font-semibold text-slate-600">
                         Google Search Sources:
                       </p>
-                      {msg.webSources.map((s, idx) => (
-                        <a
-                          key={`${s.uri}-${idx}`}
-                          href={s.uri}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1 text-xs text-[#0f4c81] hover:underline"
-                        >
-                          <ExternalLink className="h-3 w-3 shrink-0" />
-                          <span className="truncate">{s.title}</span>
-                        </a>
-                      ))}
+                      {msg.webSources.map((s, idx) => {
+                        const safeHref = sanitizeExternalHref(s.uri);
+                        if (!safeHref) return null;
+                        return (
+                          <a
+                            key={`${safeHref}-${idx}`}
+                            href={safeHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 text-xs text-[#0f4c81] hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{s.title}</span>
+                          </a>
+                        );
+                      })}
                     </div>
                   )}
                   {msg.mapsSources && msg.mapsSources.length > 0 && (
@@ -570,24 +930,34 @@ export const CivicAiStudioView: React.FC = () => {
                       <p className="text-[11px] font-semibold text-slate-600">
                         Google Maps Grounded Places:
                       </p>
-                      {msg.mapsSources.map((m, idx) => (
-                        <div key={`${m.uri}-${idx}`} className="text-xs">
-                          <a
-                            href={m.uri}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 font-medium text-[#0f4c81] hover:underline"
-                          >
-                            <MapPin className="h-3 w-3 shrink-0" />
-                            {m.title}
-                          </a>
-                          {m.snippets.map((sn, i) => (
-                            <p key={i} className="text-[11px] text-slate-600 pl-4">
-                              “{sn}”
-                            </p>
-                          ))}
-                        </div>
-                      ))}
+                      {msg.mapsSources.map((m, idx) => {
+                        const safeMapHref = sanitizeExternalHref(m.uri);
+                        return (
+                          <div key={`${m.uri}-${idx}`} className="text-xs">
+                            {safeMapHref ? (
+                              <a
+                                href={safeMapHref}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 font-medium text-[#0f4c81] hover:underline"
+                              >
+                                <MapPin className="h-3 w-3 shrink-0" />
+                                {m.title}
+                              </a>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 font-medium text-slate-700">
+                                <MapPin className="h-3 w-3 shrink-0" />
+                                {m.title}
+                              </span>
+                            )}
+                            {m.snippets.map((sn, i) => (
+                              <p key={i} className="text-[11px] text-slate-600 pl-4">
+                                “{sn}”
+                              </p>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -615,6 +985,7 @@ export const CivicAiStudioView: React.FC = () => {
                     : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
                 }`}
                 title="Dictate via gemini-3.5-transcribe"
+                aria-label="Dictate message with microphone"
               >
                 {recordingTranscribe ? (
                   <MicOff className="h-4 w-4" />
@@ -648,53 +1019,279 @@ export const CivicAiStudioView: React.FC = () => {
         </div>
       )}
 
-      {activeMode === 'voice' && (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-4">
+      {activeMode === 'transcribe' && (
+        <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-base font-semibold text-slate-900">
-                Real-Time Voice Dispatch (Gemini 3.8 Live API)
+                Audio Transcription Studio (gemini-3.5-transcribe)
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Status: <strong className="font-mono text-slate-800">{liveStatus}</strong>
+                Record field statements from your microphone or upload an audio clip to transcribe
+                into structured text.
               </p>
             </div>
-            {liveConnected ? (
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={studioUploadRef}
+                type="file"
+                accept="audio/*"
+                onChange={handleStudioAudioFileUpload}
+                className="hidden"
+              />
               <button
                 type="button"
-                onClick={stopLiveSession}
-                className="inline-flex items-center gap-2 rounded-md bg-red-700 px-4 py-2 text-xs font-semibold text-white hover:bg-red-800"
+                onClick={() => studioUploadRef.current?.click()}
+                disabled={studioBusy || studioRecording}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
               >
-                <PhoneOff className="h-4 w-4" />
-                End Live Voice Session
+                <Upload className="h-3.5 w-3.5" />
+                Upload Audio File
               </button>
-            ) : (
               <button
                 type="button"
-                onClick={startLiveSession}
-                className="inline-flex items-center gap-2 rounded-md bg-[#0f4c81] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0c3d68]"
+                onClick={handleToggleStudioRecording}
+                disabled={studioBusy}
+                className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-xs font-semibold text-white transition-colors disabled:opacity-60 whitespace-nowrap ${
+                  studioRecording
+                    ? 'bg-red-700 hover:bg-red-800'
+                    : 'bg-[#0f4c81] hover:bg-[#0c3d68]'
+                }`}
               >
-                <PhoneCall className="h-4 w-4" />
-                Start Live Voice Conversation
+                {studioRecording ? (
+                  <>
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                    Stop & Transcribe ({formatDuration(studioElapsedSec)})
+                  </>
+                ) : (
+                  <>
+                    <Mic className="h-4 w-4" />
+                    Record Microphone
+                  </>
+                )}
               </button>
-            )}
+            </div>
           </div>
 
-          <div className="h-64 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-4 space-y-2">
+          {studioError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
+              {studioError}
+            </div>
+          )}
+
+          {studioRecording && (
+            <div className="flex items-center justify-between rounded-md border border-red-200 bg-red-50/70 px-4 py-3 text-xs text-red-900">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-600 animate-pulse" />
+                <span className="font-medium">
+                  Microphone active — speak clearly. Click &ldquo;Stop &amp; Transcribe&rdquo; when finished.
+                </span>
+              </div>
+              <span className="font-mono font-semibold tabular-nums">
+                {formatDuration(studioElapsedSec)}
+              </span>
+            </div>
+          )}
+
+          {studioBusy && (
+            <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-900 font-medium">
+              Transcribing audio with <code className="font-mono">gemini-3.5-transcribe</code>...
+            </div>
+          )}
+
+          {studioAudioUrl && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 space-y-2">
+              <p className="text-xs font-medium text-slate-700">
+                Captured Audio Preview — {studioAudioLabel}
+              </p>
+              <audio src={studioAudioUrl} controls className="w-full" />
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label
+                htmlFor="studio-transcript-output"
+                className="text-xs font-semibold text-slate-700"
+              >
+                Transcribed Text Output
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyStudioTranscript}
+                  disabled={!studioTranscript.trim()}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {studioCopied ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                  {studioCopied ? 'Copied' : 'Copy'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendTranscriptToChat}
+                  disabled={!studioTranscript.trim()}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Ask Assistant
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStudioTranscript('');
+                    setStudioError(null);
+                  }}
+                  disabled={!studioTranscript.trim()}
+                  className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Clear
+                </button>
+              </div>
+            </div>
+            <textarea
+              id="studio-transcript-output"
+              rows={8}
+              value={studioTranscript}
+              onChange={(e) => setStudioTranscript(e.target.value)}
+              placeholder="Transcribed speech from your microphone or uploaded audio file will appear here..."
+              className="w-full rounded-md border border-slate-300 bg-white p-3 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-[#0f4c81] focus:outline-none"
+            />
+          </div>
+        </div>
+      )}
+
+      {activeMode === 'voice' && (
+        <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                Real-Time Voice Conversations (gemini-3.8-live)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
+                <span>
+                  Status: <strong className="font-mono text-slate-800">{liveStatus}</strong>
+                </span>
+                {liveConnected && (
+                  <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
+                    <Volume2 className="h-3.5 w-3.5" />
+                    {liveMuted ? 'Mic Muted' : 'Listening'}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="live-voice-select" className="text-xs font-medium text-slate-600">
+                Voice:
+              </label>
+              <select
+                id="live-voice-select"
+                value={selectedVoice}
+                onChange={(e) => setSelectedVoice(e.target.value as LiveVoice)}
+                disabled={liveConnected || liveConnecting}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 disabled:opacity-60"
+              >
+                {LIVE_VOICES.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+
+              {liveConnected && (
+                <button
+                  type="button"
+                  onClick={() => setLiveMuted((m) => !m)}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors whitespace-nowrap ${
+                    liveMuted
+                      ? 'border-amber-300 bg-amber-50 text-amber-900'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {liveMuted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                  {liveMuted ? 'Unmute Mic' : 'Mute Mic'}
+                </button>
+              )}
+
+              {liveConnected || liveConnecting ? (
+                <button
+                  type="button"
+                  onClick={stopLiveSession}
+                  className="inline-flex items-center gap-2 rounded-md bg-red-700 px-4 py-2 text-xs font-semibold text-white hover:bg-red-800 whitespace-nowrap"
+                >
+                  <PhoneOff className="h-4 w-4" />
+                  End Live Voice Session
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startLiveSession}
+                  className="inline-flex items-center gap-2 rounded-md bg-[#0f4c81] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0c3d68] whitespace-nowrap"
+                >
+                  <PhoneCall className="h-4 w-4" />
+                  Start Live Voice Conversation
+                </button>
+              )}
+            </div>
+          </div>
+
+          {liveError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
+              {liveError}
+            </div>
+          )}
+
+          <div className="h-72 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-4 space-y-2.5">
             {liveTranscripts.length === 0 ? (
               <p className="text-xs text-slate-500">
-                Start a Live Voice session and speak directly to walk through incident reporting,
-                jurisdiction escalation, or emergency guidance hands-free.
+                Start a Live Voice session and speak naturally in real time to walk through
+                incident reporting, jurisdiction escalation, or emergency guidance hands-free.
               </p>
             ) : (
-              liveTranscripts.map((t, idx) => (
-                <div key={idx} className="text-xs leading-relaxed">
-                  <span className="font-mono font-semibold text-slate-700">{t.who}: </span>
-                  <span className="text-slate-900">{t.text}</span>
+              liveTranscripts.map((t) => (
+                <div
+                  key={t.id}
+                  className={`rounded-md px-3 py-2 text-xs leading-relaxed ${
+                    t.who === 'Citizen'
+                      ? 'bg-sky-50 border border-sky-200 text-slate-900'
+                      : 'bg-white border border-slate-200 text-slate-900'
+                  }`}
+                >
+                  <span className="font-mono font-semibold text-[#0f4c81]">{t.who}: </span>
+                  <span>{t.text}</span>
                 </div>
               ))
             )}
           </div>
+
+          <form onSubmit={handleSendLiveText} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={liveTextInput}
+              onChange={(e) => setLiveTextInput(e.target.value)}
+              disabled={!liveConnected}
+              placeholder={
+                liveConnected
+                  ? 'Optional: type a follow-up question into the active Live voice session...'
+                  : 'Start a Live Voice session above to talk or type in real time...'
+              }
+              className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0f4c81] focus:outline-none disabled:bg-slate-50"
+            />
+            <button
+              type="submit"
+              disabled={!liveConnected || !liveTextInput.trim()}
+              className="inline-flex items-center gap-1.5 rounded-md bg-[#0f4c81] px-3.5 py-2 text-xs font-medium text-white hover:bg-[#0c3d68] disabled:opacity-50 whitespace-nowrap"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Send to Live
+            </button>
+          </form>
         </div>
       )}
 

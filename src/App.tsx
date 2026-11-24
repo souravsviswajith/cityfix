@@ -4,6 +4,7 @@ import {
   Box,
   ClipboardList,
   FilePlus2,
+  FolderOpen,
   Menu,
   ShieldAlert,
   ShieldCheck,
@@ -19,6 +20,7 @@ import { DisasterManagementView } from './components/DisasterManagementView';
 import { OfflineStatusIndicator } from './components/OfflineStatusIndicator';
 import { OfficialsDirectory } from './components/OfficialsDirectory';
 import { ReportComposer } from './components/ReportComposer';
+import { WorkspaceDocsView } from './components/WorkspaceDocsView';
 import { useAuth } from './context/AuthContext';
 import type {
   CivicReport,
@@ -30,6 +32,7 @@ type ActiveTab =
   | 'ledger'
   | 'report'
   | 'disaster'
+  | 'workspace'
   | '3d-twin'
   | 'ai-hub'
   | 'officials'
@@ -38,7 +41,7 @@ type ActiveTab =
 const LOCAL_DRAFTS_KEY = 'cityfix_local_drafts_v1';
 
 export const App: React.FC = () => {
-  const { session, refreshToken } = useAuth();
+  const { session, authReady, refreshToken } = useAuth();
   const [activeTab, setActiveTab] = useState<ActiveTab>('ledger');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -76,10 +79,25 @@ export const App: React.FC = () => {
   };
 
   const fetchReports = async () => {
+    if (!authReady) return;
+    if (!session?.authenticated) {
+      setReports([]);
+      setReportsError(null);
+      setReportsLoading(false);
+      return;
+    }
+
     setReportsLoading(true);
     setReportsError(null);
     try {
-      const res = await fetch('/api/reports');
+      const token = await refreshToken();
+      if (!token) {
+        setReports([]);
+        return;
+      }
+      const res = await fetch('/api/reports', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const data = await res.json();
       if (!res.ok) {
         setReportsError(data.error || 'Unable to load civic reports.');
@@ -95,7 +113,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchReports();
-  }, []);
+  }, [authReady, session?.authenticated, session?.uid]);
 
   const handleReportSubmitted = (newReport: CivicReport) => {
     setReports((prev) => [newReport, ...prev]);
@@ -161,6 +179,7 @@ export const App: React.FC = () => {
     { id: 'ledger', label: 'Civic Ledger', Icon: ClipboardList },
     { id: 'report', label: 'Report Issue', Icon: FilePlus2 },
     { id: 'disaster', label: 'Disaster & Mesh', Icon: ShieldAlert },
+    { id: 'workspace', label: 'Drive & Docs', Icon: FolderOpen },
     { id: '3d-twin', label: '3D Ward Twin', Icon: Box },
     { id: 'ai-hub', label: 'Civic AI Hub', Icon: Sparkles },
     { id: 'officials', label: 'Officials Directory', Icon: Users },
@@ -389,6 +408,8 @@ export const App: React.FC = () => {
           )}
 
           {activeTab === 'disaster' && <DisasterManagementView />}
+
+          {activeTab === 'workspace' && <WorkspaceDocsView reports={reports} />}
 
           {activeTab === '3d-twin' && <CivicTwin3DView />}
 

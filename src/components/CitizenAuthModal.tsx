@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { LogOut, ShieldCheck, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { GoogleSignInButton } from './GoogleSignInButton';
 
 interface CitizenAuthModalProps {
   isOpen: boolean;
@@ -122,14 +123,11 @@ export const CitizenAuthModal: React.FC<CitizenAuthModalProps> = ({
                 >
                   Cancel
                 </button>
-                <button
-                  type="button"
+                <GoogleSignInButton
                   onClick={handleGoogleLogin}
                   disabled={loading}
-                  className="rounded-md bg-[#0f4c81] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#0c3d68] disabled:opacity-60"
-                >
-                  {loading ? 'Signing In...' : 'Sign in with Google'}
-                </button>
+                  label={loading ? 'Signing In...' : 'Sign in with Google'}
+                />
               </div>
             </>
           )}

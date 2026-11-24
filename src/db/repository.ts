@@ -327,7 +327,7 @@ export async function syncCemnPacketsToDb(
           authorUid: pkt.authorUid ?? actorUid,
           authorLabel: pkt.authorLabel.slice(0, 120),
           signature: pkt.signature,
-          deliveryStatus: 'ACKNOWLEDGED',
+          deliveryStatus: pkt.deliveryStatus,
           rescueStage: pkt.rescueStage,
           hopCount: pkt.hopCount,
           transportMode: pkt.transportMode,

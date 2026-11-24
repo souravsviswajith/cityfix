@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
+  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -37,8 +38,11 @@ interface AuthContextValue {
   session: CitizenSession | null;
   authReady: boolean;
   firestoreOnline: boolean;
+  workspaceAccessToken: string | null;
   bookmarks: CitizenBookmarkItem[];
   signInWithGoogle: () => Promise<CitizenSession | null>;
+  connectWorkspace: () => Promise<string | null>;
+  clearWorkspaceToken: () => void;
   signOut: () => Promise<void>;
   refreshToken: () => Promise<string | null>;
   saveBookmark: (reportId: string, wardId: string, note: string) => Promise<void>;
@@ -47,11 +51,18 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// In-memory cache only for Workspace OAuth access token (never localStorage/sessionStorage)
+let cachedWorkspaceToken: string | null = null;
+let isSigningIn = false;
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [session, setSession] = useState<CitizenSession | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [firestoreOnline, setFirestoreOnline] = useState(true);
+  const [workspaceAccessToken, setWorkspaceAccessToken] = useState<string | null>(
+    () => cachedWorkspaceToken
+  );
   const [bookmarks, setBookmarks] = useState<CitizenBookmarkItem[]>([]);
 
   useEffect(() => {
@@ -62,18 +73,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (!user) {
+        cachedWorkspaceToken = null;
+        setWorkspaceAccessToken(null);
         setSession(null);
         setBookmarks([]);
         setAuthReady(true);
         return;
       }
 
+      if (!isSigningIn && cachedWorkspaceToken) {
+        setWorkspaceAccessToken(cachedWorkspaceToken);
+      }
+
       try {
         const idToken = await user.getIdToken();
-        let dbRole: 'citizen' | 'responder' | 'coordinator' =
-          user.email?.toLowerCase() === 'souravsviswajith@gmail.com'
-            ? 'coordinator'
-            : 'citizen';
+        let dbRole: 'citizen' | 'responder' | 'coordinator' = 'citizen';
 
         // Sync Firebase user into Cloud SQL users table
         const syncRes = await fetch('/api/auth/sync-user', {
@@ -169,28 +183,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [authReady, firebaseUser]);
 
   const signInWithGoogle = async (): Promise<CitizenSession | null> => {
-    const result = await signInWithPopup(auth, googleAuthProvider);
-    const idToken = await result.user.getIdToken();
-    const nextSession: CitizenSession = {
-      authenticated: true,
-      uid: result.user.uid,
-      email: result.user.email ?? '',
-      role:
-        result.user.email?.toLowerCase() === 'souravsviswajith@gmail.com'
-          ? 'coordinator'
-          : 'citizen',
-      idToken,
-      name: result.user.displayName || result.user.email?.split('@')[0] || 'Verified Citizen',
-      contact: result.user.email || result.user.uid,
-      channel: 'Google Sign-In',
-      verifiedAt: new Date().toISOString(),
-    };
-    setSession(nextSession);
-    return nextSession;
+    isSigningIn = true;
+    try {
+      const result = await signInWithPopup(auth, googleAuthProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) {
+        cachedWorkspaceToken = credential.accessToken;
+        setWorkspaceAccessToken(credential.accessToken);
+      }
+      const idToken = await result.user.getIdToken();
+      const nextSession: CitizenSession = {
+        authenticated: true,
+        uid: result.user.uid,
+        email: result.user.email ?? '',
+        role: 'citizen',
+        idToken,
+        name: result.user.displayName || result.user.email?.split('@')[0] || 'Verified Citizen',
+        contact: result.user.email || result.user.uid,
+        channel: 'Google Sign-In',
+        verifiedAt: new Date().toISOString(),
+      };
+      setSession(nextSession);
+      return nextSession;
+    } finally {
+      isSigningIn = false;
+    }
+  };
+
+  const connectWorkspace = async (): Promise<string | null> => {
+    isSigningIn = true;
+    try {
+      const result = await signInWithPopup(auth, googleAuthProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      const token = credential?.accessToken ?? null;
+      cachedWorkspaceToken = token;
+      setWorkspaceAccessToken(token);
+      return token;
+    } finally {
+      isSigningIn = false;
+    }
+  };
+
+  const clearWorkspaceToken = () => {
+    cachedWorkspaceToken = null;
+    setWorkspaceAccessToken(null);
   };
 
   const signOut = async () => {
     await firebaseSignOut(auth);
+    cachedWorkspaceToken = null;
+    setWorkspaceAccessToken(null);
     setSession(null);
     setBookmarks([]);
   };
@@ -236,8 +278,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         session,
         authReady,
         firestoreOnline,
+        workspaceAccessToken,
         bookmarks,
         signInWithGoogle,
+        connectWorkspace,
+        clearWorkspaceToken,
         signOut,
         refreshToken,
         saveBookmark,

@@ -98,11 +98,24 @@ export const EmergencyMeshPanel: React.FC = () => {
     return unsub;
   }, []);
 
-  // Load synced Cloud SQL CEMN recovery records when connected
+  const isCoordinator = Boolean(
+    session?.authenticated &&
+      (session.role === 'coordinator' || session.role === 'responder')
+  );
+
+  // Load synced Cloud SQL CEMN recovery records when connected as verified responder/coordinator
   const fetchRecoveryLog = async () => {
-    if (operatingMode === 'DISCONNECTED') return;
+    if (operatingMode === 'DISCONNECTED' || !isCoordinator || !session?.authenticated) {
+      return;
+    }
     try {
-      const res = await fetch('/api/cemn/events');
+      const tok = await refreshToken();
+      if (!tok) return;
+      const res = await fetch('/api/cemn/events', {
+        headers: {
+          Authorization: `Bearer ${tok}`,
+        },
+      });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.auditLog)) {
@@ -115,20 +128,16 @@ export const EmergencyMeshPanel: React.FC = () => {
   };
 
   useEffect(() => {
-    if (operatingMode === 'CONNECTED') {
+    if (operatingMode === 'CONNECTED' && isCoordinator) {
       fetchRecoveryLog();
     }
-  }, [operatingMode]);
+  }, [operatingMode, isCoordinator, session?.authenticated]);
 
   const clusters = useMemo(() => aggregateCemnIncidents(packets), [packets]);
   const unsyncedPackets = useMemo(
     () => packets.filter((p) => !p.syncedToCloud),
     [packets]
   );
-
-  const isCoordinator =
-    session?.authenticated &&
-    (session.role === 'coordinator' || session.role === 'responder');
 
   const handleBroadcastPacket = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,6 +229,7 @@ export const EmergencyMeshPanel: React.FC = () => {
       return;
     }
 
+    const previousPackets = packets;
     const updated = packets.map((p) =>
       p.messageId === packet.messageId
         ? {
@@ -233,29 +243,40 @@ export const EmergencyMeshPanel: React.FC = () => {
     saveLocalCemnPackets(updated);
 
     if (operatingMode === 'CONNECTED' && session?.authenticated) {
-      const tok = await refreshToken();
-      if (tok) {
-        const res = await fetch('/api/cemn/advance-stage', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${tok}`,
-          },
-          body: JSON.stringify({
-            messageId: packet.messageId,
-            nextStage,
-            note: `Updated via CEMN Rescue Coordination Console (${operatingMode})`,
-          }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          setBroadcastFeedback({
-            type: 'error',
-            text: data.error || 'Server rejected unauthorized stage transition.',
+      try {
+        const tok = await refreshToken();
+        if (tok) {
+          const res = await fetch('/api/cemn/advance-stage', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${tok}`,
+            },
+            body: JSON.stringify({
+              messageId: packet.messageId,
+              nextStage,
+              note: `Updated via CEMN Rescue Coordination Console (${operatingMode})`,
+            }),
           });
-          return;
+          if (!res.ok) {
+            setPackets(previousPackets);
+            saveLocalCemnPackets(previousPackets);
+            const data = await res.json().catch(() => ({}));
+            setBroadcastFeedback({
+              type: 'error',
+              text: data.error || 'Server rejected unauthorized stage transition.',
+            });
+            return;
+          }
+          fetchRecoveryLog();
         }
-        fetchRecoveryLog();
+      } catch {
+        setPackets(previousPackets);
+        saveLocalCemnPackets(previousPackets);
+        setBroadcastFeedback({
+          type: 'error',
+          text: 'Network error while verifying stage transition with backend.',
+        });
       }
     }
   };
@@ -303,19 +324,30 @@ export const EmergencyMeshPanel: React.FC = () => {
         });
       } else {
         const now = new Date().toISOString();
-        const marked = packets.map((p) => ({
-          ...p,
-          syncedToCloud: true,
-          deliveryStatus: 'ACKNOWLEDGED' as const,
-          syncedAt: p.syncedAt ?? now,
-        }));
+        const acceptedIds = new Set<string>(
+          Array.isArray(data.acceptedMessageIds) ? data.acceptedMessageIds : []
+        );
+        const marked = packets.map((p) =>
+          acceptedIds.has(p.messageId)
+            ? {
+                ...p,
+                syncedToCloud: true,
+                deliveryStatus: isCoordinator
+                  ? ('ACKNOWLEDGED' as const)
+                  : ('RECEIVED' as const),
+                syncedAt: p.syncedAt ?? now,
+              }
+            : p
+        );
         setPackets(marked);
         saveLocalCemnPackets(marked);
         setSuppressedDupes((d) => d + (data.duplicateSkippedCount ?? 0));
         await fetchRecoveryLog();
+        const rejectedCount =
+          Number(data.rejectedUnauthorized ?? 0) + Number(data.rejectedInvalid ?? 0);
         setBroadcastFeedback({
-          type: 'ok',
-          text: `Recovery sync complete: ${data.syncedCount} queued packet(s) persisted to Cloud SQL (${data.duplicateSkippedCount ?? 0} duplicates suppressed).`,
+          type: rejectedCount > 0 ? 'error' : 'ok',
+          text: `Recovery sync complete: ${data.syncedCount} queued packet(s) persisted to Cloud SQL (${data.duplicateSkippedCount ?? 0} duplicates suppressed${rejectedCount > 0 ? `, ${rejectedCount} unauthorized/invalid packet(s) rejected` : ''}).`,
         });
       }
     } catch {

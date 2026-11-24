@@ -11,6 +11,7 @@ import {
   DISASTER_CATEGORIES,
   VERIFIED_EMERGENCY_HELPLINES,
 } from '../data/disasterGuidance';
+import { sanitizeExternalHref } from '../lib/securityValidation';
 import type { DisasterScale } from '../types/civic';
 import { EmergencyMeshPanel } from './EmergencyMeshPanel';
 
@@ -95,15 +96,17 @@ export const DisasterManagementView: React.FC = () => {
                 </div>
 
                 <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                  <a
-                    href={helpline.sourceCitation}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500 hover:text-[#0f4c81] hover:underline"
-                  >
-                    {helpline.sourceCitation.replace('https://', '')}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
+                  {sanitizeExternalHref(helpline.sourceCitation) && (
+                    <a
+                      href={sanitizeExternalHref(helpline.sourceCitation)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500 hover:text-[#0f4c81] hover:underline"
+                    >
+                      {helpline.sourceCitation.replace('https://', '')}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
 
                   <a
                     href={`tel:${dialTarget}`}
@@ -227,15 +230,17 @@ export const DisasterManagementView: React.FC = () => {
 
               <div className="border-t border-slate-100 pt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                 <span>Source: {activeGuide.sourceAgency}</span>
-                <a
-                  href={activeGuide.sourceUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 font-mono text-[#0f4c81] hover:underline"
-                >
-                  {activeGuide.sourceUrl}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
+                {sanitizeExternalHref(activeGuide.sourceUrl) && (
+                  <a
+                    href={sanitizeExternalHref(activeGuide.sourceUrl)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-mono text-[#0f4c81] hover:underline"
+                  >
+                    {activeGuide.sourceUrl}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
             </article>
           </div>

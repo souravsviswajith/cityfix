@@ -277,6 +277,30 @@ export const MeshMessageQueue: React.FC<MeshMessageQueueProps> = ({
         });
 
         const data = await res.json().catch(() => ({}));
+        if (res.status === 403) {
+          const rejectIso = new Date().toISOString();
+          const msg =
+            typeof data.error === 'string'
+              ? data.error
+              : 'Rejected: Account lacks authorization to sync these packets.';
+          persistRetryMeta((prev) => {
+            const next = { ...prev };
+            for (const id of dueIds) {
+              next[id] = {
+                messageId: id,
+                state: 'EXHAUSTED',
+                retryCount: MAX_RETRIES,
+                maxRetries: MAX_RETRIES,
+                nextRetryAt: null,
+                lastAttemptAt: rejectIso,
+                lastError: msg,
+              };
+            }
+            return next;
+          });
+          setStatusBanner({ tone: 'error', text: msg });
+          return;
+        }
         if (!res.ok) {
           throw new Error(
             typeof data.error === 'string'
@@ -286,10 +310,12 @@ export const MeshMessageQueue: React.FC<MeshMessageQueueProps> = ({
         }
 
         const syncedIso = new Date().toISOString();
-        const acceptedIds = new Set(
-          duePackets
-            .filter((p) => !(p.eventType === 'EVACUATION_ORDER' && !isCoordinator))
-            .map((p) => p.messageId)
+        const acceptedIds = new Set<string>(
+          Array.isArray(data.acceptedMessageIds)
+            ? data.acceptedMessageIds
+            : duePackets
+                .filter((p) => !(p.eventType === 'EVACUATION_ORDER' && !isCoordinator))
+                .map((p) => p.messageId)
         );
 
         const nextPackets = packetsRef.current.map((p) =>
@@ -297,7 +323,9 @@ export const MeshMessageQueue: React.FC<MeshMessageQueueProps> = ({
             ? {
                 ...p,
                 syncedToCloud: true,
-                deliveryStatus: 'ACKNOWLEDGED' as const,
+                deliveryStatus: isCoordinator
+                  ? ('ACKNOWLEDGED' as const)
+                  : ('RECEIVED' as const),
                 syncedAt: p.syncedAt ?? syncedIso,
               }
             : p
@@ -326,7 +354,7 @@ export const MeshMessageQueue: React.FC<MeshMessageQueueProps> = ({
                 nextRetryAt: null,
                 lastAttemptAt: syncedIso,
                 lastError:
-                  'Rejected: Unverified citizen accounts cannot sync authoritative evacuation orders.',
+                  'Rejected: Packet violated schema validation or requires responder/coordinator authorization.',
               };
             }
           }
@@ -335,13 +363,15 @@ export const MeshMessageQueue: React.FC<MeshMessageQueueProps> = ({
 
         const syncedCount = Number(data.syncedCount ?? acceptedIds.size);
         const duplicateSkippedCount = Number(data.duplicateSkippedCount ?? 0);
+        const rejectedTotal =
+          Number(data.rejectedUnauthorized ?? 0) + Number(data.rejectedInvalid ?? 0);
         onSyncCompleted?.({ syncedCount, duplicateSkippedCount });
 
         setStatusBanner({
-          tone: data.rejectedUnauthorized > 0 ? 'warn' : 'ok',
+          tone: rejectedTotal > 0 ? 'warn' : 'ok',
           text: `Synced ${syncedCount} emergency packet(s) to Cloud SQL (${duplicateSkippedCount} duplicate(s) suppressed).${
-            data.rejectedUnauthorized > 0
-              ? ` ${data.rejectedUnauthorized} unauthorized evacuation packet(s) blocked.`
+            rejectedTotal > 0
+              ? ` ${rejectedTotal} unauthorized/invalid packet(s) blocked.`
               : ''
           }`,
         });

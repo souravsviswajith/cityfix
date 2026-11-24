@@ -1,4 +1,9 @@
 import { WARD_ZONES } from '../data/civicDirectory';
+import {
+  RESTRICTED_RESCUE_STAGES,
+  isPlainObject,
+  isValidCoordinatePair,
+} from '../lib/securityValidation';
 import type {
   CemnEventType,
   CemnIdentityTier,
@@ -337,18 +342,73 @@ export function subscribeTabMeshRelays(
   if (typeof BroadcastChannel === 'undefined') return () => {};
   const ch = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
   ch.onmessage = (ev) => {
-    if (ev.data?.type === 'CEMN_PACKET_RELAY' && ev.data?.packet?.messageId) {
-      const incoming = ev.data.packet as CemnPacket;
-      if (new Date(incoming.ttlExpiresAt).getTime() < Date.now()) {
-        return; // Expired TTL dropped
-      }
-      if (recordSeenMessageId(incoming.messageId)) {
-        onPacket({
-          ...incoming,
-          hopCount: incoming.hopCount + 1,
-          deliveryStatus: 'RECEIVED',
-        });
-      }
+    if (!isPlainObject(ev.data) || ev.data.type !== 'CEMN_PACKET_RELAY') return;
+    const raw = ev.data.packet;
+    if (!isPlainObject(raw)) return;
+
+    const messageId = typeof raw.messageId === 'string' ? raw.messageId.trim() : '';
+    if (!/^[A-Za-z0-9_-]{4,64}$/.test(messageId)) return;
+
+    const eventType = raw.eventType as CemnEventType;
+    if (
+      eventType !== 'SOS' &&
+      eventType !== 'MISSING_PERSON' &&
+      eventType !== 'RESOURCE'
+    ) {
+      // Authoritative EVACUATION_ORDER packets are only accepted from authenticated server sync
+      return;
+    }
+
+    if (
+      typeof raw.title !== 'string' ||
+      !raw.title.trim() ||
+      typeof raw.summary !== 'string' ||
+      !raw.summary.trim() ||
+      typeof raw.wardId !== 'string' ||
+      !raw.wardId.trim()
+    ) {
+      return;
+    }
+
+    if (!isValidCoordinatePair(raw.latitude, raw.longitude)) return;
+
+    const ttlMs = new Date(String(raw.ttlExpiresAt ?? '')).getTime();
+    if (Number.isNaN(ttlMs) || ttlMs < Date.now()) {
+      return; // Invalid or expired TTL dropped
+    }
+
+    const incoming = raw as unknown as CemnPacket;
+    const safeStage: RescueOperationStage = RESTRICTED_RESCUE_STAGES.includes(
+      incoming.rescueStage
+    )
+      ? 'CITIZEN_REPORTED'
+      : incoming.rescueStage === 'VOLUNTEER_RESPONSE'
+      ? 'VOLUNTEER_RESPONSE'
+      : 'CITIZEN_REPORTED';
+    const safeTier: CemnIdentityTier =
+      incoming.identityTier === 'COMMUNITY_VOLUNTEER'
+        ? 'COMMUNITY_VOLUNTEER'
+        : 'UNVERIFIED_CITIZEN';
+    const hopCount =
+      typeof incoming.hopCount === 'number' &&
+      Number.isInteger(incoming.hopCount) &&
+      incoming.hopCount >= 0 &&
+      incoming.hopCount < 64
+        ? incoming.hopCount + 1
+        : 1;
+
+    if (recordSeenMessageId(messageId)) {
+      onPacket({
+        ...incoming,
+        messageId,
+        title: raw.title.trim().slice(0, 180),
+        summary: raw.summary.trim().slice(0, 1000),
+        wardId: raw.wardId.trim().slice(0, 64),
+        rescueStage: safeStage,
+        identityTier: safeTier,
+        hopCount,
+        deliveryStatus: 'RECEIVED',
+      });
     }
   };
   return () => ch.close();

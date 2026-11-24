@@ -3,7 +3,8 @@
   "description": "Citizen-powered civic issue reporting, automatic geotagging, responsible authority identification, public officials directory, and AI-assisted formal complaint drafting.",
   "requestFramePermissions": [
     "geolocation",
-    "camera"
+    "camera",
+    "microphone"
   ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

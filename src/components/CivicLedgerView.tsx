@@ -5,6 +5,8 @@ import {
   BookmarkCheck,
   CheckCircle2,
   Clock,
+  ExternalLink,
+  FileText,
   FileWarning,
   Mail,
   Map as MapIcon,
@@ -18,11 +20,17 @@ import {
 } from 'lucide-react';
 import { generateCivicReportPdf } from '../lib/reportPdf';
 import {
+  WorkspaceAuthExpiredError,
+  createGoogleDoc,
+  formatCivicReportDocContent,
+} from '../lib/workspaceClient';
+import {
   ISSUE_CATEGORIES,
   PUBLIC_OFFICIALS,
   WARD_ZONES,
 } from '../data/civicDirectory';
 import { resolveReportMediaUrl } from '../data/civicMedia';
+import { sanitizeExternalHref } from '../lib/securityValidation';
 import { useAuth } from '../context/AuthContext';
 import type { CivicReport, LocalDraftReport, ReportStatus } from '../types/civic';
 import { CityFixGoogleMap, type MapMarkerPoint } from './CityFixGoogleMap';
@@ -83,7 +91,15 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
   onDeleteDraft,
   onStatusChange,
 }) => {
-  const { session, bookmarks, saveBookmark, removeBookmark } = useAuth();
+  const {
+    session,
+    bookmarks,
+    saveBookmark,
+    removeBookmark,
+    workspaceAccessToken,
+    connectWorkspace,
+    clearWorkspaceToken,
+  } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [wardFilter, setWardFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | ReportStatus>('all');
@@ -92,6 +108,13 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
   const [showMap, setShowMap] = useState(true);
   const [bookmarkBusy, setBookmarkBusy] = useState(false);
   const [printingId, setPrintingId] = useState<string | null>(null);
+  const [docExportBusyId, setDocExportBusyId] = useState<string | null>(null);
+  const [docExportResult, setDocExportResult] = useState<{
+    reportId: string;
+    title: string;
+    webViewLink: string;
+  } | null>(null);
+  const [docExportError, setDocExportError] = useState<string | null>(null);
 
   const baseReports = useMemo(() => {
     if (!onlyMine) return reports;
@@ -201,6 +224,37 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
       await generateCivicReportPdf(report);
     } finally {
       setPrintingId(null);
+    }
+  };
+
+  const handleExportToGoogleDoc = async (report: CivicReport) => {
+    setDocExportError(null);
+    setDocExportBusyId(report.id);
+    try {
+      let token = workspaceAccessToken;
+      if (!token) {
+        token = await connectWorkspace();
+      }
+      if (!token) {
+        setDocExportError('Google Drive & Docs authorization was not granted.');
+        return;
+      }
+      const { title, bodyText } = formatCivicReportDocContent(report);
+      const created = await createGoogleDoc(token, title, bodyText);
+      setDocExportResult({
+        reportId: report.id,
+        title: created.title,
+        webViewLink: created.webViewLink,
+      });
+    } catch (err) {
+      if (err instanceof WorkspaceAuthExpiredError) {
+        clearWorkspaceToken();
+      }
+      setDocExportError(
+        err instanceof Error ? err.message : 'Unable to export report to Google Docs.'
+      );
+    } finally {
+      setDocExportBusyId(null);
     }
   };
 
@@ -633,7 +687,16 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
                     <h3 className="text-base font-semibold text-slate-900">
                       {activeReport.title}
                     </h3>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleExportToGoogleDoc(activeReport)}
+                        disabled={docExportBusyId === activeReport.id}
+                        className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 whitespace-nowrap"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        {docExportBusyId === activeReport.id ? 'Exporting...' : 'Google Doc'}
+                      </button>
                       <button
                         type="button"
                         onClick={() => handlePrintReport(activeReport)}
@@ -674,6 +737,27 @@ export const CivicLedgerView: React.FC<CivicLedgerViewProps> = ({
                     <p className="mt-1.5 font-mono text-[11px] text-slate-500 break-all">
                       SHA-256: {activeReport.evidenceHash}
                     </p>
+                  )}
+                  {docExportError && (
+                    <p className="mt-2 rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">
+                      {docExportError}
+                    </p>
+                  )}
+                  {docExportResult && docExportResult.reportId === activeReport.id && (
+                    <div className="mt-2 flex items-center justify-between gap-2 rounded border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-900">
+                      <span className="truncate">Saved to Google Docs</span>
+                      {sanitizeExternalHref(docExportResult.webViewLink) && (
+                        <a
+                          href={sanitizeExternalHref(docExportResult.webViewLink)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 font-semibold text-emerald-800 hover:underline whitespace-nowrap shrink-0"
+                        >
+                          Open Doc
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
                   )}
                 </div>
 

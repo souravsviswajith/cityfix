@@ -14,6 +14,7 @@ import {
   WARD_ZONES,
   evaluateAuthorityVerification,
 } from '../data/civicDirectory';
+import { sanitizeExternalHref } from '../lib/securityValidation';
 import type { IssueCategory, VerificationStatus } from '../types/civic';
 
 const VERIFICATION_LABEL: Record<
@@ -250,9 +251,9 @@ export const OfficialsDirectory: React.FC = () => {
                 <div className="mt-4 border-t border-slate-100 pt-3 text-[11px] text-slate-500 space-y-1">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span>Provenance: {freshnessLabel}</span>
-                    {official.sourceUrl && (
+                    {sanitizeExternalHref(official.sourceUrl) && (
                       <a
-                        href={official.sourceUrl}
+                        href={sanitizeExternalHref(official.sourceUrl)}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-1 font-mono text-slate-600 hover:text-[#0f4c81] hover:underline"
