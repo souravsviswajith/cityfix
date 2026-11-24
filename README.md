@@ -472,7 +472,18 @@ A successful TypeScript check, APK assembly, or UI demonstration does not prove 
 
 This section covers local web and Android builds plus downloadable CI artifacts. See the [Web setup and release guide](docs/WEB_SETUP_AND_RELEASE_GUIDE.md) for the React/Vite client and the [Android setup guide](docs/ANDROID_SETUP_AND_RELEASE_GUIDE.md) for native setup, SDK configuration, device testing, and APK builds.
 
-### 1. Web client build\n\nRequirements: Node.js 22 and pnpm 9.15.9.\n\n```bash\npnpm install --frozen-lockfile\npnpm run check\n```\n\nThe production frontend is generated in `dist/`. Deploying that directory alone does not deploy the Express API; configure a same-origin reverse proxy/API rewrite or serve the frontend and backend together. See [Web setup and release](docs/WEB_SETUP_AND_RELEASE_GUIDE.md).\n\n### 2. Clone the repository
+### 1. Web client build
+
+Requirements: Node.js 22 and pnpm 10.10.0.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run check
+```
+
+The production frontend is generated in `dist/`. Deploying that directory alone does not deploy the Express API; configure a same-origin reverse proxy/API rewrite or serve the frontend and backend together. See [Web setup and release](docs/WEB_SETUP_AND_RELEASE_GUIDE.md).
+
+### 2. Clone the repository
 
 Install Git, JDK 17, Android Studio, and the Android SDK first. The complete guide lists the exact versions and installation steps.
 
