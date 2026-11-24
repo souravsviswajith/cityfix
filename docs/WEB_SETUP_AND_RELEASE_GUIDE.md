@@ -6,7 +6,7 @@ CityFix maintains a React/Vite web client and a native Kotlin/Jetpack Compose An
 
 Requirements:
 - Node.js 22
-- pnpm 9.15.9
+- pnpm 10.10.0
 - Git
 
 From the repository root:
