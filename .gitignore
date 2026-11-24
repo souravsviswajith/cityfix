@@ -1,6 +1,29 @@
-node_modules
-dist
+# JavaScript dependencies
+node_modules/
+
+# Local secrets and developer environment
 .env
-.env.local
-.env.*.local
-.gmp_cache
+.env.*
+!.env.example
+
+# Web build output
+dist/
+dist-ssr/
+
+# Android / Gradle build output and local machine configuration
+.gradle/
+**/.gradle/
+**/build/
+android/local.properties
+*.jks
+*.keystore
+
+# IDE and OS files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Local tooling cache
+.gmp_cache/
