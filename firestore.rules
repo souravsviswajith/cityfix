@@ -1,10 +1,49 @@
 rules_version = '2';
 
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId} (matches request.auth.uid)
+// Fields:
+//   - uid: string (required, 1-128 chars, matches request.auth.uid, immutable)
+//   - displayName: string (required, 1-100 chars)
+//   - preferredWardId: string (optional, max 64 chars)
+//   - meshCallsign: string (optional, max 40 chars)
+//   - updatedAt: timestamp (required, matches request.time)
+//
+// Collection: citizen_bookmarks
+// Document ID: {bookmarkId} (safe alphanumeric ID, 1-128 chars)
+// Fields:
+//   - userId: string (required, 1-128 chars, matches request.auth.uid, immutable)
+//   - reportId: string (required, 1-64 chars)
+//   - wardId: string (required, 1-64 chars)
+//   - note: string (required, max 500 chars)
+//   - createdAt: timestamp (required, matches request.time)
+//
+// Collection: ward_bulletins
+// Document ID: {bulletinId} (safe alphanumeric ID, 1-128 chars)
+// Fields:
+//   - wardId: string (required, 1-64 chars)
+//   - title: string (required, 3-180 chars)
+//   - summary: string (required, 3-1000 chars)
+//   - severity: string (required, enum ['Low', 'Moderate', 'Urgent', 'Critical'])
+//   - visibility: string (required, enum ['public'])
+//   - authorUid: string (required, 1-128 chars, matches request.auth.uid, immutable)
+//   - createdAt: timestamp (required, matches request.time, immutable)
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
     match /{document=**} {
       allow read, write: if false;
     }
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
 
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
@@ -27,8 +66,12 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isVerifiedUser() && request.auth.token.email == 'souravsviswajith@gmail.com';
+      return isVerifiedUser() && (request.auth.token.role == 'coordinator' || request.auth.token.admin == true);
     }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
 
     function isValidUserPrefs(data) {
       return data.keys().hasAll(['uid', 'displayName', 'updatedAt'])
@@ -64,6 +107,10 @@ service cloud.firestore {
         && data.authorUid == request.auth.uid
         && data.createdAt == request.time;
     }
+
+    // ===============================================================
+    // Collection Match Rules
+    // ===============================================================
 
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
